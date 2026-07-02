@@ -14,6 +14,9 @@
   --primary-500: #2c7a4d;
   --primary-600: #1e5c38;
   --primary-700: #154a2b;
+  /* FIX: 补充缺失的变量 */
+  --primary-50: #e8f5e9;
+  --primary-100: #c8e6c9;
   --accent-danger: #e53e3e;
   --accent-warning: #f5a623;
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -40,6 +43,9 @@ body.dark {
   --primary-500: #4a9a6e;
   --primary-600: #5aae7e;
   --primary-700: #6abe8e;
+  /* FIX: 补充暗色主题变量 */
+  --primary-50: #1e3a2a;
+  --primary-100: #2d5a3d;
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
 }

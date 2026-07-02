@@ -57,6 +57,38 @@ export async function getAllHistory() {
   });
 }
 
+// FIX: 修改分页函数，使用 lastItem 对象（包含 timestamp 和 id）作为边界
+export async function getHistoryPage(limit, lastItem = null) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const index = store.index('timestamp');
+    // 如果提供了 lastItem，则限定 timestamp <= lastItem.timestamp
+    const range = lastItem ? IDBKeyRange.upperBound(lastItem.timestamp, true) : null;
+    const request = index.openCursor(range, 'prev');
+    const results = [];
+    let count = 0;
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (cursor && count < limit) {
+        const value = cursor.value;
+        // 如果存在 lastItem，且时间戳相同，则只接受 id < lastItem.id 的记录（避免同毫秒数据遗漏）
+        if (lastItem && value.timestamp === lastItem.timestamp && value.id >= lastItem.id) {
+          cursor.continue();
+          return;
+        }
+        results.push(value);
+        count++;
+        cursor.continue();
+      } else {
+        resolve(results);
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export async function addHistoryItem(item) {
   const db = await openDB();
   return new Promise((resolve, reject) => {

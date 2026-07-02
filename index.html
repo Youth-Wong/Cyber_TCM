@@ -40,7 +40,8 @@
             <div class="base-row">
               <label>姓名：<input type="text" id="patient-name" placeholder="患者姓名" /></label>
               <label>性别：<select id="patient-gender"><option value="">未知</option><option value="男">男</option><option value="女">女</option></select></label>
-              <label>年龄：<input type="text" id="patient-age" placeholder="岁" /></label>
+              <!-- FIX: 添加 step="1" 限制整数年龄 -->
+              <label>年龄：<input type="number" id="patient-age" placeholder="岁" min="0" max="150" step="1" /></label>
             </div>
           </div>
 
@@ -58,7 +59,8 @@
 
           <!-- 病史/四诊 -->
           <label for="patient-history">病史与四诊信息：</label>
-          <textarea id="patient-history" placeholder="请填写主诉、现病史、舌脉等详细四诊信息..."></textarea>
+          <!-- FIX: 添加 maxlength="2000" 前端限制输入长度 -->
+          <textarea id="patient-history" placeholder="请填写主诉、现病史、舌脉等详细四诊信息..." maxlength="2000"></textarea>
 
           <!-- 操作按钮 -->
           <div class="actions">
@@ -76,7 +78,7 @@
         </div>
       </section>
 
-      <!-- 视图：历史记录（移除 hidden 类） -->
+      <!-- 视图：历史记录 -->
       <section id="view-history" class="view">
         <div class="history-container">
           <div class="export-area">
@@ -89,7 +91,7 @@
         </div>
       </section>
 
-      <!-- 视图：设置（移除 hidden 类） -->
+      <!-- 视图：设置 -->
       <section id="view-settings" class="view">
         <div class="settings-container">
           <h2>模型配置</h2>

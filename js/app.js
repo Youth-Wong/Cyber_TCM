@@ -1,13 +1,11 @@
 // js/app.js
-import { getSettings, saveSettings, getAllHistory, addHistoryItem, deleteHistoryItem, clearAllHistory } from './utils/storage.js';
-import { callLLMStream } from './utils/llm-adapter.js';
+import { getSettings, saveSettings, getAllHistory, addHistoryItem, deleteHistoryItem, clearAllHistory, getHistoryPage } from './utils/storage.js';
+// FIX: 静态导入 callLLM 用于测试（问题9）
+import { callLLM, callLLMStream } from './utils/llm-adapter.js';
 import { utf8ToBase64, base64ToUtf8 } from './utils/encoding.js';
 
 // ===== DOM 引用（部分获取延迟到 init） =====
-let $ = (sel) => document.querySelector(sel);
-let $$ = (sel) => document.querySelectorAll(sel);
-
-// 视图
+// FIX: 移除未使用的 $ 和 $$（问题2）
 let viewGenerate, viewHistory, viewSettings, navBtns;
 
 // 生成相关
@@ -29,10 +27,14 @@ let themeToggle, toastEl;
 let currentResult = null;
 let isGenerating = false;
 let abortController = null;
-let allHistory = [];
-let currentDisplayCount = 20;
-const PAGE_SIZE = 20;
 let settings = null;
+
+// ---------- 分页状态 ----------
+let historyItems = [];
+let historyLastItem = null; // FIX: 改为存储最后一个条目对象，而非仅时间戳（问题3）
+let hasMoreHistory = true;
+let isLoadingHistory = false;
+const PAGE_SIZE = 20;
 
 // 默认设置
 const DEFAULT_FLOWS = [
@@ -76,7 +78,6 @@ function applyTheme(theme) {
 function loadSettings() {
   let saved = getSettings();
   if (!saved) {
-    // 初始化默认
     saved = {
       models: DEFAULT_MODELS,
       flows: DEFAULT_FLOWS,
@@ -85,7 +86,6 @@ function loadSettings() {
     };
     saveSettings(saved);
   }
-  // 确保字段存在
   if (!saved.models) saved.models = DEFAULT_MODELS;
   if (!saved.flows) saved.flows = DEFAULT_FLOWS;
   if (!saved.defaultFlowId && saved.flows.length) saved.defaultFlowId = saved.flows[0].id;
@@ -124,7 +124,6 @@ function switchView(viewId) {
       console.error(`未找到视图: view-${viewId}`);
       return;
     }
-    // 更新导航按钮状态
     document.querySelectorAll('.nav-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === viewId);
     });
@@ -136,7 +135,7 @@ function switchView(viewId) {
   }
 }
 
-// ===== 生成处方（保持不变，但需确保 DOM 引用） =====
+// ===== 生成处方相关 =====
 function buildPatientInfo() {
   const name = patientName ? patientName.value.trim() : '';
   const gender = patientGender ? patientGender.value : '';
@@ -159,11 +158,113 @@ function getCurrentStructured() {
   };
 }
 
-// 十八反十九畏检查（与之前相同，省略节省篇幅，实际请复制原函数）
+// ===== FIX: 完善十八反十九畏检查（问题6） =====
 function checkContraindications(composition) {
-  // ... 完整函数请从原代码复制，此处仅示意
-  // 为了完整性，请参照之前提供的函数实现
-  return [];
+  const herbNames = composition.map(item => item.herb.trim());
+  // 别名映射（标准名 -> 别名列表）
+  const aliasMap = {
+    '乌头': ['乌头', '川乌', '草乌', '附子', '制附子', '白附片', '黑顺片'],
+    '半夏': ['半夏', '法半夏', '姜半夏', '清半夏'],
+    '贝母': ['贝母', '川贝母', '浙贝母'],
+    '瓜蒌': ['瓜蒌', '全瓜蒌', '天花粉'], // 天花粉是瓜蒌根
+    '白及': ['白及', '白芨'],
+    '白蔹': ['白蔹'],
+    '海藻': ['海藻'],
+    '大戟': ['大戟', '红大戟', '京大戟'],
+    '甘遂': ['甘遂'],
+    '芫花': ['芫花'],
+    '藜芦': ['藜芦'],
+    '人参': ['人参', '红参', '西洋参'],
+    '沙参': ['沙参', '南沙参', '北沙参'],
+    '丹参': ['丹参'],
+    '玄参': ['玄参', '元参'],
+    '苦参': ['苦参'],
+    '细辛': ['细辛'],
+    '白芍': ['白芍', '赤芍'], // 赤芍与白芍同科，但通常藜芦反白芍，赤芍是否反有争议，暂包含
+    '硫黄': ['硫黄', '硫磺'],
+    '朴硝': ['朴硝', '芒硝', '元明粉'],
+    '水银': ['水银'],
+    '砒霜': ['砒霜', '信石'],
+    '狼毒': ['狼毒'],
+    '密陀僧': ['密陀僧'],
+    '巴豆': ['巴豆', '巴豆霜'],
+    '牵牛子': ['牵牛子', '牵牛'],
+    '丁香': ['丁香', '公丁香', '母丁香'],
+    '郁金': ['郁金', '广郁金'],
+    '牙硝': ['牙硝', '芒硝'],
+    '京三棱': ['三棱', '京三棱'],
+    '犀角': ['犀角', '水牛角'], // 犀角现已禁用，但保留
+    '五灵脂': ['五灵脂'],
+    '肉桂': ['肉桂', '桂皮'],
+    '赤石脂': ['赤石脂'],
+    '甘草': ['甘草', '炙甘草']
+  };
+
+  // 规范化函数：将药材名转为标准名（取别名映射中的第一个）
+  function normalize(herb) {
+    for (let [standard, aliases] of Object.entries(aliasMap)) {
+      if (aliases.includes(herb) || aliases.some(a => herb.includes(a))) {
+        return standard;
+      }
+    }
+    return herb; // 未映射则返回原名称
+  }
+  const normalized = herbNames.map(n => normalize(n));
+
+  const contraindications = [];
+
+  // 十八反规则（使用标准名）
+  const eighteenOpposites = [
+    { herbs: ['乌头'], oppose: '半夏', msg: '乌头反半夏' },
+    { herbs: ['乌头'], oppose: '贝母', msg: '乌头反贝母' },
+    { herbs: ['乌头'], oppose: '瓜蒌', msg: '乌头反瓜蒌' },
+    { herbs: ['乌头'], oppose: '白及', msg: '乌头反白及' },
+    { herbs: ['乌头'], oppose: '白蔹', msg: '乌头反白蔹' },
+    { herbs: ['甘草'], oppose: '海藻', msg: '甘草反海藻' },
+    { herbs: ['甘草'], oppose: '大戟', msg: '甘草反大戟' },
+    { herbs: ['甘草'], oppose: '甘遂', msg: '甘草反甘遂' },
+    { herbs: ['甘草'], oppose: '芫花', msg: '甘草反芫花' },
+    { herbs: ['藜芦'], oppose: '人参', msg: '藜芦反人参' },
+    { herbs: ['藜芦'], oppose: '沙参', msg: '藜芦反沙参' },
+    { herbs: ['藜芦'], oppose: '丹参', msg: '藜芦反丹参' },
+    { herbs: ['藜芦'], oppose: '玄参', msg: '藜芦反玄参' },
+    { herbs: ['藜芦'], oppose: '苦参', msg: '藜芦反苦参' },
+    { herbs: ['藜芦'], oppose: '细辛', msg: '藜芦反细辛' },
+    { herbs: ['藜芦'], oppose: '白芍', msg: '藜芦反白芍' },
+  ];
+
+  // 十九畏规则
+  const nineteenFears = [
+    { herbs: ['硫黄'], fear: '朴硝', msg: '硫黄畏朴硝' },
+    { herbs: ['水银'], fear: '砒霜', msg: '水银畏砒霜' },
+    { herbs: ['狼毒'], fear: '密陀僧', msg: '狼毒畏密陀僧' },
+    { herbs: ['巴豆'], fear: '牵牛子', msg: '巴豆畏牵牛子' },
+    { herbs: ['丁香'], fear: '郁金', msg: '丁香畏郁金' },
+    { herbs: ['牙硝'], fear: '京三棱', msg: '牙硝畏三棱' },
+    { herbs: ['乌头'], fear: '犀角', msg: '川乌、草乌畏犀角' },
+    { herbs: ['人参'], fear: '五灵脂', msg: '人参畏五灵脂' },
+    { herbs: ['肉桂'], fear: '赤石脂', msg: '肉桂畏赤石脂' },
+  ];
+
+  // 检查十八反
+  for (const rule of eighteenOpposites) {
+    const hasHerb = rule.herbs.some(h => normalized.includes(h));
+    const hasOppose = normalized.includes(rule.oppose);
+    if (hasHerb && hasOppose) {
+      contraindications.push(rule.msg);
+    }
+  }
+
+  // 检查十九畏
+  for (const rule of nineteenFears) {
+    const hasHerb = rule.herbs.some(h => normalized.includes(h));
+    const hasFear = normalized.includes(rule.fear);
+    if (hasHerb && hasFear) {
+      contraindications.push(rule.msg);
+    }
+  }
+
+  return contraindications;
 }
 
 function extractAndParseJSON(text) {
@@ -184,6 +285,16 @@ async function generatePrescription() {
   const structured = getCurrentStructured();
   if (!structured.history && !structured.name && !structured.age) {
     showToast('请至少填写病史或患者基本信息');
+    return;
+  }
+
+  // 输入验证
+  if (structured.history.length > 2000) {
+    showToast('病史信息过长，请精简至2000字以内');
+    return;
+  }
+  if (structured.age && (isNaN(structured.age) || structured.age < 0 || structured.age > 150)) {
+    showToast('年龄请输入有效数字（0-150）');
     return;
   }
 
@@ -256,7 +367,9 @@ async function generatePrescription() {
 
     let parsed = extractAndParseJSON(fullResponse);
     if (!parsed) {
-      throw new Error('无法解析为 JSON，请检查模型返回格式');
+      // FIX: 改进错误提示（问题13）
+      const preview = fullResponse.substring(0, 200) + (fullResponse.length > 200 ? '...' : '');
+      throw new Error(`模型返回格式异常，无法解析为处方。请检查 API 配置或尝试重新生成。\n返回内容预览：${preview}`);
     }
     if (parsed.prescription && parsed.prescription.composition) {
       parsed.prescription.composition = parsed.prescription.composition.map(item => ({
@@ -275,7 +388,20 @@ async function generatePrescription() {
     if (resultActions) resultActions.classList.remove('hidden');
     showToast('处方生成成功');
 
+    // FIX: 自动保存时检查重复（问题11）
     if (settings.autoSave) {
+      // 获取最新一条历史记录
+      const lastPage = await getHistoryPage(1);
+      if (lastPage.length > 0) {
+        const last = lastPage[0];
+        // 比较结果是否相同（通过 JSON 字符串比较）
+        const currentStr = JSON.stringify(currentResult);
+        const lastStr = JSON.stringify(last.result);
+        if (currentStr === lastStr) {
+          showToast('与最近历史相同，未重复保存', 1500);
+          return;
+        }
+      }
       await addHistoryItem({
         structured: structured,
         fullText: fullText,
@@ -331,7 +457,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// ===== 复制 & 保存历史（保留原实现） =====
+// ===== 复制 & 保存历史 =====
 function copyToClipboard(str) {
   if (navigator.clipboard && window.isSecureContext !== false) {
     navigator.clipboard.writeText(str).then(() => showToast('已复制')).catch(() => fallbackCopy(str));
@@ -350,21 +476,45 @@ function fallbackCopy(str) {
   document.body.removeChild(ta);
 }
 
-// ===== 历史记录 =====
+// ===== 历史记录（分页加载） =====
 async function loadHistory() {
-  allHistory = await getAllHistory();
-  currentDisplayCount = PAGE_SIZE;
-  renderHistoryPage();
+  historyItems = [];
+  historyLastItem = null; // FIX: 重置为 null
+  hasMoreHistory = true;
+  isLoadingHistory = false;
+  await loadMoreHistory();
+}
+
+async function loadMoreHistory() {
+  if (isLoadingHistory || !hasMoreHistory) return;
+  isLoadingHistory = true;
+  try {
+    const page = await getHistoryPage(PAGE_SIZE, historyLastItem);
+    if (page.length < PAGE_SIZE) hasMoreHistory = false;
+    if (page.length > 0) {
+      historyItems = historyItems.concat(page);
+      historyLastItem = page[page.length - 1]; // FIX: 存储最后一条对象
+    } else {
+      hasMoreHistory = false;
+    }
+    renderHistoryPage();
+  } catch (err) {
+    showToast('加载历史失败：' + err.message);
+    // FIX: 错误时重置 isLoadingHistory，允许重试（问题4）
+    isLoadingHistory = false;
+  } finally {
+    // FIX: 确保无论如何重置（问题4）
+    isLoadingHistory = false;
+  }
 }
 
 function renderHistoryPage() {
   if (!historyList) return;
-  if (allHistory.length === 0) {
+  if (historyItems.length === 0) {
     historyList.innerHTML = '<p style="text-align:center;color:var(--text-muted);">暂无历史记录</p>';
     return;
   }
-  const pageData = allHistory.slice(0, currentDisplayCount);
-  let html = pageData.map(h => {
+  let html = historyItems.map(h => {
     let preview = '';
     if (h.structured) {
       const name = h.structured.name || '无姓名';
@@ -389,17 +539,24 @@ function renderHistoryPage() {
     `;
   }).join('');
 
-  if (currentDisplayCount < allHistory.length) {
+  if (hasMoreHistory) {
     html += `<div class="load-more-container"><button id="load-more-btn" class="btn-secondary">加载更多</button></div>`;
   }
   historyList.innerHTML = html;
 
-  // 事件绑定
+  // 事件绑定（使用事件委托）
   historyList.querySelectorAll('.view-history').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.id;
-      const item = allHistory.find(h => h.id === id);
+      const item = historyItems.find(h => h.id === id);
       if (!item) return;
+      // FIX: 检查当前输入是否有内容，防止未保存丢失（问题14）
+      const currentHistory = patientHistory ? patientHistory.value.trim() : '';
+      if (currentHistory) {
+        if (!confirm('当前输入框中有未保存的病史信息，加载历史将覆盖，是否继续？')) {
+          return;
+        }
+      }
       if (patientHistory && patientHistory.value.trim() && !confirm('当前未保存的处方将被覆盖，确定查看？')) return;
       currentResult = item.result;
       if (item.structured) {
@@ -427,19 +584,20 @@ function renderHistoryPage() {
       const id = btn.dataset.id;
       if (confirm('确定删除这条历史记录？')) {
         await deleteHistoryItem(id);
-        allHistory = allHistory.filter(h => h.id !== id);
-        renderHistoryPage();
+        historyItems = historyItems.filter(h => h.id !== id);
+        if (historyItems.length === 0) {
+          await loadHistory();
+        } else {
+          renderHistoryPage();
+        }
         showToast('已删除');
       }
     });
   });
 
-  const loadMore = historyList.querySelector('#load-more-btn');
-  if (loadMore) {
-    loadMore.addEventListener('click', () => {
-      currentDisplayCount += PAGE_SIZE;
-      renderHistoryPage();
-    });
+  const loadMoreBtn = historyList.querySelector('#load-more-btn');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', loadMoreHistory);
   }
 }
 
@@ -447,9 +605,10 @@ function renderHistoryPage() {
 function renderSettings() {
   if (!modelsContainer || !flowsContainer) return;
   try {
-    // 渲染模型
     modelsContainer.innerHTML = settings.models.map((m) => {
       const hasKey = m.apiKey && m.apiKey.length > 0;
+      // FIX: 如果 apiKey 为空，显示“未设置”（问题8）
+      const placeholder = hasKey ? '已设置，留空不变' : '未设置，请输入';
       return `
         <div class="model-item" data-id="${m.id}">
           <label>名称：<input type="text" class="model-name" value="${escapeHtml(m.name)}" /></label>
@@ -463,7 +622,7 @@ function renderSettings() {
           </label>
           <label>Endpoint：<input type="text" class="model-endpoint" value="${escapeHtml(m.endpoint||'')}" placeholder="留空则默认" /></label>
           <label>模型名：<input type="text" class="model-modelname" value="${escapeHtml(m.modelName||'')}" placeholder="可选" /></label>
-          <label>API Key：<input type="password" class="model-apikey" placeholder="${hasKey ? '已设置，留空不变' : '请输入'}" data-original="${escapeHtml(m.apiKey||'')}" /></label>
+          <label>API Key：<input type="password" class="model-apikey" placeholder="${placeholder}" data-original="${escapeHtml(m.apiKey||'')}" /></label>
           <div class="default-checkbox">
             <input type="checkbox" class="model-active" ${m.active ? 'checked' : ''}>
             <label>设为默认</label>
@@ -475,7 +634,6 @@ function renderSettings() {
       `;
     }).join('');
 
-    // 事件：删除模型
     modelsContainer.querySelectorAll('.delete-model').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const item = e.target.closest('.model-item');
@@ -488,7 +646,6 @@ function renderSettings() {
       });
     });
 
-    // 事件：active 互斥
     modelsContainer.querySelectorAll('.model-active').forEach(cb => {
       cb.addEventListener('change', function() {
         if (this.checked) {
@@ -499,7 +656,7 @@ function renderSettings() {
       });
     });
 
-    // 事件：测试连接
+    // FIX: 使用静态导入的 callLLM 测试（问题9）
     modelsContainer.querySelectorAll('.test-model').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         const item = e.target.closest('.model-item');
@@ -507,7 +664,6 @@ function renderSettings() {
       });
     });
 
-    // 渲染流派
     flowsContainer.innerHTML = settings.flows.map((flow) => {
       const isDefault = (flow.id === settings.defaultFlowId);
       const isBuiltin = ['jingfang','shifang','comprehensive'].includes(flow.id);
@@ -556,7 +712,7 @@ function renderSettings() {
   }
 }
 
-// ===== 测试模型 =====
+// ===== 测试模型（使用静态导入的 callLLM） =====
 async function testModel(modelItem) {
   const nameInput = modelItem.querySelector('.model-name');
   const typeSelect = modelItem.querySelector('.model-type');
@@ -594,7 +750,7 @@ async function testModel(modelItem) {
   const timeoutId = setTimeout(() => controller.abort(), 10000);
 
   try {
-    const { callLLM } = await import('./utils/llm-adapter.js');
+    // FIX: 直接使用静态导入的 callLLM（问题9）
     const response = await callLLM(config, '请只回复“OK”', controller.signal);
     clearTimeout(timeoutId);
     if (response && response.includes('OK')) {
@@ -695,7 +851,17 @@ function init() {
         showToast('正在取消...');
       }
     });
-    if (retryBtn) retryBtn.addEventListener('click', generatePrescription);
+    // FIX: 重试按钮清空旧结果（问题10）
+    if (retryBtn) {
+      retryBtn.addEventListener('click', () => {
+        if (resultContainer) {
+          resultContainer.innerHTML = '';
+          resultContainer.classList.add('hidden');
+        }
+        if (resultActions) resultActions.classList.add('hidden');
+        generatePrescription();
+      });
+    }
     if (copyBtn) copyBtn.addEventListener('click', () => {
       if (!currentResult) return;
       let text = '';
@@ -720,67 +886,71 @@ function init() {
       clearHistoryBtn.addEventListener('click', async () => {
         if (confirm('确定清空所有历史记录？')) {
           await clearAllHistory();
-          allHistory = [];
+          historyItems = [];
+          hasMoreHistory = false;
           if (historyList) historyList.innerHTML = '<p style="text-align:center;color:var(--text-muted);">暂无历史记录</p>';
           showToast('已清空历史');
         }
       });
     }
-    if (exportBtn) exportBtn.addEventListener('click', async () => {
-      let startVal = exportStart ? exportStart.value : '';
-      let endVal = exportEnd ? exportEnd.value : '';
-      let startTime = 0;
-      if (startVal) {
-        const d = new Date(startVal);
-        d.setHours(0,0,0,0);
-        startTime = d.getTime();
-      }
-      let endTime = Date.now();
-      if (endVal) {
-        const d = new Date(endVal);
-        d.setHours(23,59,59,999);
-        endTime = d.getTime();
-      }
-      const all = await getAllHistory();
-      const filtered = all.filter(h => h.timestamp >= startTime && h.timestamp <= endTime);
-      if (filtered.length === 0) {
-        showToast('所选时间段内无记录', 2000);
-        return;
-      }
-      const headers = ['时间','姓名','性别','年龄','病史/四诊','辨证分析','治法','方名','用药','方解','医嘱'];
-      const rows = [headers];
-      for (const item of filtered) {
-        const time = new Date(item.timestamp).toLocaleString();
-        let name='', gender='', age='', historyText='';
-        if (item.structured) {
-          name = item.structured.name || '';
-          gender = item.structured.gender || '';
-          age = item.structured.age || '';
-          historyText = (item.structured.history || '').replace(/\n/g, ' ');
-        } else if (item.fullText) {
-          historyText = item.fullText.replace(/\n/g, ' ');
+    // FIX: 导出 CSV 支持空时间范围（问题15）
+    if (exportBtn) {
+      exportBtn.addEventListener('click', async () => {
+        let startVal = exportStart ? exportStart.value : '';
+        let endVal = exportEnd ? exportEnd.value : '';
+        let startTime = 0;
+        if (startVal) {
+          const d = new Date(startVal);
+          d.setHours(0,0,0,0);
+          startTime = d.getTime();
         }
-        const result = item.result || {};
-        const syndrome = (result.syndrome_analysis || '').replace(/\n/g, ' ');
-        const principle = (result.treatment_principle || '').replace(/\n/g, ' ');
-        const formulaName = result.prescription?.name || '';
-        const composition = (result.prescription?.composition || []).map(c => `${c.herb} ${c.dosage}`).join('；');
-        const explanation = (result.prescription?.formula_explanation || '').replace(/\n/g, ' ');
-        const advice = (result.medical_advice || '').replace(/\n/g, ' ');
-        rows.push([time, name, gender, age, historyText, syndrome, principle, formulaName, composition, explanation, advice]);
-      }
-      const csvContent = rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
-      const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `处方历史_${Date.now()}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      showToast('导出成功');
-    });
+        let endTime = Infinity;
+        if (endVal) {
+          const d = new Date(endVal);
+          d.setHours(23,59,59,999);
+          endTime = d.getTime();
+        }
+        const all = await getAllHistory();
+        const filtered = all.filter(h => h.timestamp >= startTime && h.timestamp <= endTime);
+        if (filtered.length === 0) {
+          showToast('所选时间段内无记录', 2000);
+          return;
+        }
+        const headers = ['时间','姓名','性别','年龄','病史/四诊','辨证分析','治法','方名','用药','方解','医嘱'];
+        const rows = [headers];
+        for (const item of filtered) {
+          const time = new Date(item.timestamp).toLocaleString();
+          let name='', gender='', age='', historyText='';
+          if (item.structured) {
+            name = item.structured.name || '';
+            gender = item.structured.gender || '';
+            age = item.structured.age || '';
+            historyText = (item.structured.history || '').replace(/\n/g, ' ');
+          } else if (item.fullText) {
+            historyText = item.fullText.replace(/\n/g, ' ');
+          }
+          const result = item.result || {};
+          const syndrome = (result.syndrome_analysis || '').replace(/\n/g, ' ');
+          const principle = (result.treatment_principle || '').replace(/\n/g, ' ');
+          const formulaName = result.prescription?.name || '';
+          const composition = (result.prescription?.composition || []).map(c => `${c.herb} ${c.dosage}`).join('；');
+          const explanation = (result.prescription?.formula_explanation || '').replace(/\n/g, ' ');
+          const advice = (result.medical_advice || '').replace(/\n/g, ' ');
+          rows.push([time, name, gender, age, historyText, syndrome, principle, formulaName, composition, explanation, advice]);
+        }
+        const csvContent = rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+        const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `处方历史_${Date.now()}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('导出成功');
+      });
+    }
 
     // 设置页面事件
     if (addModelBtn) {
@@ -813,6 +983,7 @@ function init() {
         renderFlowsSelect();
       });
     }
+    // FIX: 保存设置时允许清空 API Key（问题8）
     if (saveSettingsBtn) {
       saveSettingsBtn.addEventListener('click', () => {
         // 收集模型
@@ -833,10 +1004,11 @@ function init() {
           const modelName = item.querySelector('.model-modelname').value;
           const keyInput = item.querySelector('.model-apikey');
           let apiKey = keyInput.value;
-          if (!apiKey) {
-            const orig = keyInput.dataset.original || '';
-            apiKey = orig;
+          if (apiKey === '') {
+            // 用户清空，则设为空字符串
+            apiKey = '';
           } else {
+            // 否则编码保存
             apiKey = utf8ToBase64(apiKey);
           }
           const active = item.querySelector('.model-active').checked;
@@ -882,6 +1054,14 @@ function init() {
     // 默认切换到生成视图
     switchView('generate');
     console.log('应用初始化完成');
+
+    // 注册 Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then(reg => console.log('Service Worker registered', reg))
+        .catch(err => console.error('Service Worker registration failed', err));
+    }
+
   } catch (err) {
     console.error('初始化失败:', err);
     showToast('应用启动失败，请刷新页面');

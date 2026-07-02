@@ -1,5 +1,6 @@
 // sw.js
-const CACHE_NAME = 'prescription-cache-v1';
+// FIX: 升级版本号，触发缓存更新
+const CACHE_NAME = 'prescription-cache-v2'; // v1 -> v2
 const urlsToCache = [
   '/',
   '/index.html',
@@ -17,6 +18,7 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(urlsToCache))
+      .then(() => self.skipWaiting()) // FIX: 强制激活
   );
 });
 
@@ -27,7 +29,7 @@ self.addEventListener('activate', event => {
         keys.filter(key => key !== CACHE_NAME)
             .map(key => caches.delete(key))
       );
-    })
+    }).then(() => self.clients.claim()) // FIX: 立即控制所有客户端
   );
 });
 

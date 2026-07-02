@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+  <title>中医处方智能助手</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/app.css">
+  <meta name="theme-color" content="#2c7a4d">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部导航 -->
+    <header class="app-header">
+      <div class="header-left">
+        <span class="logo">🌿</span>
+        <span class="title">处方智能助手</span>
+      </div>
+      <nav class="header-nav">
+        <button class="nav-btn active" data-view="generate">开方</button>
+        <button class="nav-btn" data-view="history">历史</button>
+        <button class="nav-btn" data-view="settings">设置</button>
+      </nav>
+      <button id="theme-toggle" class="icon-btn" title="切换主题">🌙</button>
+    </header>
+
+    <!-- 主视图容器 -->
+    <main class="main-content">
+      <!-- 视图：生成处方 -->
+      <section id="view-generate" class="view active">
+        <div class="generate-container">
+          <!-- 流派选择 -->
+          <div class="style-selector">
+            <label for="prescription-style">处方流派：</label>
+            <select id="prescription-style"></select>
+          </div>
+
+          <!-- 患者基本信息 -->
+          <div class="patient-base">
+            <div class="base-row">
+              <label>姓名：<input type="text" id="patient-name" placeholder="患者姓名" /></label>
+              <label>性别：<select id="patient-gender"><option value="">未知</option><option value="男">男</option><option value="女">女</option></select></label>
+              <label>年龄：<input type="text" id="patient-age" placeholder="岁" /></label>
+            </div>
+          </div>
+
+          <!-- 选项 -->
+          <div class="options-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="avoid-contraindications" />
+              禁止十八反十九畏
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="premium-herbs" />
+              精品中药（5g整数倍）
+            </label>
+          </div>
+
+          <!-- 病史/四诊 -->
+          <label for="patient-history">病史与四诊信息：</label>
+          <textarea id="patient-history" placeholder="请填写主诉、现病史、舌脉等详细四诊信息..."></textarea>
+
+          <!-- 操作按钮 -->
+          <div class="actions">
+            <button id="generate-btn" class="btn-primary">智能辨证开方</button>
+            <button id="cancel-btn" class="btn-danger" style="display:none;">取消</button>
+            <button id="retry-btn" class="btn-secondary" style="display:none;">🔄 重试</button>
+          </div>
+
+          <!-- 结果展示区 -->
+          <div id="result-container" class="hidden"></div>
+          <div class="result-actions hidden" id="result-actions">
+            <button id="copy-btn" class="btn-secondary">📋 一键复制病历</button>
+            <button id="save-history-btn" class="btn-secondary">💾 保存到历史</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图：历史记录（移除 hidden 类） -->
+      <section id="view-history" class="view">
+        <div class="history-container">
+          <div class="export-area">
+            <label>起始：<input type="datetime-local" id="export-start" /></label>
+            <label>结束：<input type="datetime-local" id="export-end" /></label>
+            <button id="export-history-btn" class="btn-secondary">📎 导出 CSV</button>
+          </div>
+          <div id="history-list"></div>
+          <button id="clear-history-btn" class="btn-danger" style="width:100%; margin-top:16px;">清空所有历史</button>
+        </div>
+      </section>
+
+      <!-- 视图：设置（移除 hidden 类） -->
+      <section id="view-settings" class="view">
+        <div class="settings-container">
+          <h2>模型配置</h2>
+          <div id="models-container"></div>
+          <button id="add-model-btn" class="btn-secondary">+ 添加模型</button>
+
+          <h2 style="margin-top:24px;">处方流派</h2>
+          <div id="flows-container"></div>
+          <button id="add-flow-btn" class="btn-secondary">+ 添加流派</button>
+
+          <h2 style="margin-top:24px;">通用设置</h2>
+          <label class="checkbox-label">
+            <input type="checkbox" id="auto-save-history" /> 每次生成后自动保存到历史
+          </label>
+
+          <div style="margin-top:16px;">
+            <button id="save-settings-btn" class="btn-primary">保存设置</button>
+            <span id="save-status" style="margin-left:12px;"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Toast 提示 -->
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <!-- 主要脚本 (ES Module) -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "中医处方智能助手",
+  "short_name": "处方助手",
+  "description": "AI 辅助中医辨证开方",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#2c7a4d",
+  "theme_color": "#2c7a4d",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

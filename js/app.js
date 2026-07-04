@@ -604,12 +604,31 @@ function renderHistoryPage() {
 }
 
 // ===== 设置页面渲染 =====
+// 辅助函数（放在 renderSettings 之前）
+function getDefaultEndpoint(type) {
+  if (type === 'deepseek') return 'https://api.deepseek.com/v1';
+  if (type === 'qwen') return 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
+  return '';
+}
+function getDefaultModelName(type) {
+  if (type === 'deepseek') return 'deepseek-v4-flash';
+  if (type === 'qwen') return 'qwen-plus';
+  return '';
+}
+
+// 替换原有的 renderSettings 函数
 function renderSettings() {
   if (!modelsContainer || !flowsContainer) return;
   try {
     modelsContainer.innerHTML = settings.models.map((m) => {
       const hasKey = m.apiKey && m.apiKey.length > 0;
       const placeholder = hasKey ? '已设置，留空不变' : '未设置，请输入';
+      // 获取默认值
+      const defaultEndpoint = getDefaultEndpoint(m.type);
+      const defaultModelName = getDefaultModelName(m.type);
+      // 如果当前字段为空，则用默认值填充（但保存时仍可能为空）
+      const endpointVal = m.endpoint || defaultEndpoint;
+      const modelNameVal = m.modelName || defaultModelName;
       return `
         <div class="model-item" data-id="${m.id}">
           <label>名称：<input type="text" class="model-name" value="${escapeHtml(m.name)}" /></label>
@@ -619,8 +638,8 @@ function renderSettings() {
               <option value="qwen" ${m.type==='qwen'?'selected':''}>通义千问 (Qwen)</option>
             </select>
           </label>
-          <label>Endpoint：<input type="text" class="model-endpoint" value="${escapeHtml(m.endpoint||'')}" placeholder="留空则默认" /></label>
-          <label>模型名：<input type="text" class="model-modelname" value="${escapeHtml(m.modelName||'')}" placeholder="可选" /></label>
+          <label>Endpoint：<input type="text" class="model-endpoint" value="${escapeHtml(endpointVal)}" placeholder="留空则默认" /></label>
+          <label>模型名：<input type="text" class="model-modelname" value="${escapeHtml(modelNameVal)}" placeholder="可选" /></label>
           <label>API Key：<input type="password" class="model-apikey" placeholder="${placeholder}" data-original="${escapeHtml(m.apiKey||'')}" /></label>
           <div class="default-checkbox">
             <input type="checkbox" class="model-active" ${m.active ? 'checked' : ''}>
@@ -633,6 +652,7 @@ function renderSettings() {
       `;
     }).join('');
 
+    // 后续事件绑定（保持不变）
     modelsContainer.querySelectorAll('.delete-model').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const item = e.target.closest('.model-item');
@@ -662,6 +682,7 @@ function renderSettings() {
       });
     });
 
+    // 渲染流派（保持不变）
     flowsContainer.innerHTML = settings.flows.map((flow) => {
       const isDefault = (flow.id === settings.defaultFlowId);
       const isBuiltin = ['jingfang','shifang','comprehensive'].includes(flow.id);

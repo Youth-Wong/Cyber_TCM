@@ -610,23 +610,22 @@ function getDefaultEndpoint(type) {
   if (type === 'qwen') return 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
   return '';
 }
+
 function getDefaultModelName(type) {
   if (type === 'deepseek') return 'deepseek-v4-flash';
   if (type === 'qwen') return 'qwen-plus';
   return '';
 }
 
-// 替换原有的 renderSettings 函数
 function renderSettings() {
   if (!modelsContainer || !flowsContainer) return;
   try {
+    // -------- 渲染模型卡片 --------
     modelsContainer.innerHTML = settings.models.map((m) => {
       const hasKey = m.apiKey && m.apiKey.length > 0;
       const placeholder = hasKey ? '已设置，留空不变' : '未设置，请输入';
-      // 获取默认值
       const defaultEndpoint = getDefaultEndpoint(m.type);
       const defaultModelName = getDefaultModelName(m.type);
-      // 如果当前字段为空，则用默认值填充（但保存时仍可能为空）
       const endpointVal = m.endpoint || defaultEndpoint;
       const modelNameVal = m.modelName || defaultModelName;
       return `
@@ -652,7 +651,7 @@ function renderSettings() {
       `;
     }).join('');
 
-    // 后续事件绑定（保持不变）
+    // -------- 绑定删除、默认复选框、测试连接事件（与原逻辑相同） --------
     modelsContainer.querySelectorAll('.delete-model').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const item = e.target.closest('.model-item');
@@ -682,7 +681,19 @@ function renderSettings() {
       });
     });
 
-    // 渲染流派（保持不变）
+    // ========== FIX: 绑定类型切换事件，自动更新默认 Endpoint 和 模型名 ==========
+    modelsContainer.querySelectorAll('.model-item').forEach(item => {
+      const select = item.querySelector('.model-type');
+      const endpointInput = item.querySelector('.model-endpoint');
+      const modelNameInput = item.querySelector('.model-modelname');
+      select.addEventListener('change', function() {
+        const type = this.value;
+        endpointInput.value = getDefaultEndpoint(type);
+        modelNameInput.value = getDefaultModelName(type);
+      });
+    });
+
+    // -------- 渲染流派（与原逻辑相同） --------
     flowsContainer.innerHTML = settings.flows.map((flow) => {
       const isDefault = (flow.id === settings.defaultFlowId);
       const isBuiltin = ['jingfang','shifang','comprehensive'].includes(flow.id);

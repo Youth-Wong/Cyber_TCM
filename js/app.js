@@ -46,7 +46,7 @@ const DEFAULT_MODELS = [
   {
     id: 'deepseek',
     name: 'DeepSeek V4',
-    endpoint: 'https://api.deepseek.com',
+    endpoint: 'https://api.deepseek.com/',
     apiKey: '',                // 用户需手动填写
     modelName: 'deepseek-v4-flash',  // 可改为 deepseek-v4-pro
     active: true
@@ -624,7 +624,7 @@ function renderHistoryPage() {
 // ===== 设置页面渲染 =====
 // 辅助函数
 function getDefaultEndpoint() {
-  return 'https://api.deepseek.com/v1';
+  return 'https://api.deepseek.com/';
 }
 
 function getDefaultModelName() {
@@ -654,6 +654,9 @@ function renderSettings() {
       const placeholder = hasKey ? '已设置，留空不变' : '请输入您的 DeepSeek API Key';
       const endpointVal = m.endpoint || getDefaultEndpoint();
       const modelNameVal = m.modelName || getDefaultModelName();
+      // 构造下拉菜单，默认选中 flash，如果 modelNameVal 是 pro 则选中 pro，否则 flash 默认
+      const flashSelected = modelNameVal === 'deepseek-v4-pro' ? '' : 'selected';
+      const proSelected = modelNameVal === 'deepseek-v4-pro' ? 'selected' : '';
       return `
         <div class="model-item" data-id="${m.id}">
           <label>名称：<input type="text" class="model-name" value="${escapeHtml(m.name)}" /></label>
@@ -661,7 +664,12 @@ function renderSettings() {
             <span>类型：DeepSeek（OpenAI 兼容）</span>
           </div>
           <label>Endpoint：<input type="text" class="model-endpoint" value="${escapeHtml(endpointVal)}" placeholder="留空则使用默认" /></label>
-          <label>模型名：<input type="text" class="model-modelname" value="${escapeHtml(modelNameVal)}" placeholder="如 deepseek-v4-flash / deepseek-v4-pro" /></label>
+          <label>模型名：
+            <select class="model-modelname">
+              <option value="deepseek-v4-flash" ${flashSelected}>deepseek-v4-flash</option>
+              <option value="deepseek-v4-pro" ${proSelected}>deepseek-v4-pro</option>
+            </select>
+          </label>
           <label>API Key：<input type="password" class="model-apikey" placeholder="${placeholder}" data-original="${escapeHtml(m.apiKey||'')}" /></label>
           <div class="default-checkbox">
             <input type="checkbox" class="model-active" ${m.active ? 'checked' : ''}>
@@ -674,7 +682,7 @@ function renderSettings() {
       `;
     }).join('');
 
-    // -------- 绑定事件 --------
+    // -------- 绑定事件（其余部分不变） --------
     modelsContainer.querySelectorAll('.delete-model').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const item = e.target.closest('.model-item');
@@ -985,7 +993,7 @@ function init() {
       addModelBtn.addEventListener('click', () => {
         const newModel = {
           id: 'model_' + Date.now(),
-          name: 'DeepSeek 模型',
+          name: 'DeepSeek v4',
           endpoint: getDefaultEndpoint(),
           apiKey: '',
           modelName: getDefaultModelName(),

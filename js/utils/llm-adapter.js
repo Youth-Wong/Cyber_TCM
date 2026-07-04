@@ -1,82 +1,63 @@
 // js/utils/llm-adapter.js
 
-// 导出 callLLM 供测试和外部调用
 export async function callLLM(modelConfig, prompt, signal) {
   const { type, endpoint, apiKey, modelName } = modelConfig;
+  if (type !== 'deepseek' && type !== 'qwen') {
+    throw new Error('不支持的模型类型，仅支持 DeepSeek 和 通义千问 (Qwen)');
+  }
   let finalEndpoint = endpoint;
   if (!finalEndpoint) {
-    switch (type) {
-      case 'deepseek': finalEndpoint = 'https://api.deepseek.com/v1'; break;
-      case 'openai': finalEndpoint = 'https://api.openai.com/v1'; break;
-      case 'qwen': finalEndpoint = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'; break;
-      default: finalEndpoint = '';
-    }
+    if (type === 'deepseek') finalEndpoint = 'https://api.deepseek.com/v1';
+    else if (type === 'qwen') finalEndpoint = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
   }
-  switch (type) {
-    case 'deepseek':
-    case 'openai':
-      return callOpenAICompatible(finalEndpoint, apiKey, modelName || (type === 'deepseek' ? 'deepseek-chat' : 'gpt-3.5-turbo'), prompt, signal);
-    case 'qwen':
-      return callQWen(finalEndpoint, apiKey, modelName || 'qwen-plus', prompt, signal);
-    case 'ernie':
-      return callErnie(apiKey, modelName || 'completions', prompt, signal);
-    default:
-      throw new Error('不支持的模型类型');
+  // 当模型名为空时，使用当前最新默认模型
+  const finalModel = modelName || (type === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-plus');
+  if (type === 'deepseek') {
+    return callOpenAICompatible(finalEndpoint, apiKey, finalModel, prompt, signal);
+  } else if (type === 'qwen') {
+    return callQWen(finalEndpoint, apiKey, finalModel, prompt, signal);
   }
 }
 
 export async function* callLLMStream(modelConfig, prompt, signal) {
   const { type, endpoint, apiKey, modelName } = modelConfig;
+  if (type !== 'deepseek' && type !== 'qwen') {
+    throw new Error('不支持的模型类型，仅支持 DeepSeek 和 通义千问 (Qwen)');
+  }
   let finalEndpoint = endpoint;
   if (!finalEndpoint) {
-    switch (type) {
-      case 'deepseek': finalEndpoint = 'https://api.deepseek.com/v1'; break;
-      case 'openai': finalEndpoint = 'https://api.openai.com/v1'; break;
-      case 'qwen': finalEndpoint = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'; break;
-      default: finalEndpoint = '';
-    }
+    if (type === 'deepseek') finalEndpoint = 'https://api.deepseek.com/v1';
+    else if (type === 'qwen') finalEndpoint = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
   }
-  switch (type) {
-    case 'deepseek':
-    case 'openai':
-      yield* callOpenAICompatibleStream(finalEndpoint, apiKey, modelName || (type === 'deepseek' ? 'deepseek-chat' : 'gpt-3.5-turbo'), prompt, signal);
-      break;
-    case 'qwen':
-      yield* callQWenStream(finalEndpoint, apiKey, modelName || 'qwen-plus', prompt, signal);
-      break;
-    case 'ernie':
-      yield* callErnieStream(apiKey, modelName || 'completions', prompt, signal);
-      break;
-    default:
-      throw new Error('不支持的模型类型');
+  const finalModel = modelName || (type === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-plus');
+  if (type === 'deepseek') {
+    yield* callOpenAICompatibleStream(finalEndpoint, apiKey, finalModel, prompt, signal);
+  } else if (type === 'qwen') {
+    yield* callQWenStream(finalEndpoint, apiKey, finalModel, prompt, signal);
   }
 }
 
-// ---------- 非流式实现（保持不变，但为超时控制可添加类似逻辑） ----------
-// 为保持简洁，非流式函数不做修改（已支持外部 signal）
-
+// ---------- 非流式实现 ----------
 async function callOpenAICompatible(baseURL, apiKey, model, prompt, signal) {
   const url = `${baseURL}/chat/completions`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-  const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 60000);
+  const onAbort = () => abortController.abort();
+  if (signal) signal.addEventListener('abort', onAbort);
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: model,
+        model,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: 4096
       }),
-      signal: combinedSignal
+      signal: abortController.signal
     });
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
     if (!response.ok) {
       const err = await response.text();
       throw new Error(`API 请求失败: ${response.status} ${err}`);
@@ -85,45 +66,63 @@ async function callOpenAICompatible(baseURL, apiKey, model, prompt, signal) {
     return data.choices[0].message.content;
   } catch (err) {
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
     if (err.name === 'AbortError') throw new Error('请求已取消或超时');
     throw err;
   }
 }
 
-// 类似地，callQWen 和 callErnie 也应有超时，但已有 controller 机制，暂不额外修改。
+async function callQWen(endpoint, apiKey, model, prompt, signal) {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 60000);
+  const onAbort = () => abortController.abort();
+  if (signal) signal.addEventListener('abort', onAbort);
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        input: { messages: [{ role: 'user', content: prompt }] },
+        parameters: { result_format: 'message' }
+      }),
+      signal: abortController.signal
+    });
+    clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
+    if (!response.ok) throw new Error(`通义千问错误: ${response.status}`);
+    const data = await response.json();
+    return data.output.choices[0].message.content;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
+    if (err.name === 'AbortError') throw new Error('请求已取消或超时');
+    throw err;
+  }
+}
 
-// ---------- 流式实现（添加超时控制） ----------
+// ---------- 流式实现 ----------
 async function* callOpenAICompatibleStream(baseURL, apiKey, model, prompt, signal) {
   const url = `${baseURL}/chat/completions`;
-  // FIX: 增加内部超时控制
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-  // 合并外部信号和内部超时信号
-  const combinedSignal = signal ? new AbortController() : controller;
-  if (signal) {
-    const onAbort = () => combinedSignal.abort();
-    signal.addEventListener('abort', onAbort);
-    controller.signal.addEventListener('abort', () => {
-      signal.removeEventListener('abort', onAbort);
-    });
-  }
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 60000);
+  const onAbort = () => abortController.abort();
+  if (signal) signal.addEventListener('abort', onAbort);
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: model,
+        model,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: 4096,
         stream: true
       }),
-      signal: combinedSignal.signal
+      signal: abortController.signal
     });
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
     if (!response.ok) {
       const err = await response.text();
       throw new Error(`API 请求失败: ${response.status} ${err}`);
@@ -151,43 +150,38 @@ async function* callOpenAICompatibleStream(baseURL, apiKey, model, prompt, signa
     }
   } finally {
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 
 async function* callQWenStream(endpoint, apiKey, model, prompt, signal) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-  const combinedSignal = signal ? new AbortController() : controller;
-  if (signal) {
-    const onAbort = () => combinedSignal.abort();
-    signal.addEventListener('abort', onAbort);
-    controller.signal.addEventListener('abort', () => {
-      signal.removeEventListener('abort', onAbort);
-    });
-  }
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 60000);
+  const onAbort = () => abortController.abort();
+  if (signal) signal.addEventListener('abort', onAbort);
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: model,
+        model,
         input: { messages: [{ role: 'user', content: prompt }] },
         parameters: { result_format: 'message', incremental_output: true }
       }),
-      signal: combinedSignal.signal
+      signal: abortController.signal
     });
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
     if (!response.ok) throw new Error(`通义千问错误: ${response.status}`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
       for (const line of lines) {
         if (line.startsWith('data:')) {
           try {
@@ -200,54 +194,6 @@ async function* callQWenStream(endpoint, apiKey, model, prompt, signal) {
     }
   } finally {
     clearTimeout(timeoutId);
-  }
-}
-
-async function* callErnieStream(apiKey, model, prompt, signal) {
-  const [clientId, clientSecret] = apiKey.split('|');
-  if (!clientId || !clientSecret) throw new Error('文心一言 API Key 格式错误');
-  const tokenUrl = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-  const combinedSignal = signal ? new AbortController() : controller;
-  if (signal) {
-    const onAbort = () => combinedSignal.abort();
-    signal.addEventListener('abort', onAbort);
-    controller.signal.addEventListener('abort', () => {
-      signal.removeEventListener('abort', onAbort);
-    });
-  }
-  try {
-    const tokenResp = await fetch(tokenUrl, { method: 'POST', signal: combinedSignal.signal });
-    clearTimeout(timeoutId);
-    const tokenData = await tokenResp.json();
-    const accessToken = tokenData.access_token;
-    const apiUrl = `https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/${model}?access_token=${accessToken}`;
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], stream: true }),
-      signal: combinedSignal.signal
-    });
-    if (!response.ok) throw new Error(`文心一言错误: ${response.status}`);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          try {
-            const data = JSON.parse(line.slice(5));
-            const content = data.result;
-            if (content) yield content;
-          } catch (e) {}
-        }
-      }
-    }
-  } finally {
-    clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }

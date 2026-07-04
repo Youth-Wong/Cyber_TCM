@@ -1,11 +1,9 @@
 // js/app.js
 import { getSettings, saveSettings, getAllHistory, addHistoryItem, deleteHistoryItem, clearAllHistory, getHistoryPage } from './utils/storage.js';
-// FIX: 静态导入 callLLM 用于测试（问题9）
 import { callLLM, callLLMStream } from './utils/llm-adapter.js';
 import { utf8ToBase64, base64ToUtf8 } from './utils/encoding.js';
 
-// ===== DOM 引用（部分获取延迟到 init） =====
-// FIX: 移除未使用的 $ 和 $$（问题2）
+// ===== DOM 引用（部分延迟获取） =====
 let viewGenerate, viewHistory, viewSettings, navBtns;
 
 // 生成相关
@@ -31,19 +29,28 @@ let settings = null;
 
 // ---------- 分页状态 ----------
 let historyItems = [];
-let historyLastItem = null; // FIX: 改为存储最后一个条目对象，而非仅时间戳（问题3）
+let historyLastItem = null;
 let hasMoreHistory = true;
 let isLoadingHistory = false;
 const PAGE_SIZE = 20;
 
-// 默认设置
+// 默认设置（仅 DeepSeek 和 Qwen）
 const DEFAULT_FLOWS = [
   { id: 'jingfang', name: '经方派', prompt: '你是一位经方派中医专家，精通《伤寒杂病论》，请根据患者信息辨证论治，给出经方加减。' },
   { id: 'shifang', name: '时方派', prompt: '你是一位时方派中医专家，注重卫气营血和三焦辨证，请为患者开具时方。' },
   { id: 'comprehensive', name: '学院派', prompt: '你是一位学院派中西医结合专家，请综合脏腑、八纲、气血津液进行辨证，提供治疗方案。' }
 ];
+
 const DEFAULT_MODELS = [
-  { id: 'deepseek', name: 'DeepSeek-V3', type: 'deepseek', endpoint: 'https://api.deepseek.com/v1', apiKey: '', modelName: 'deepseek-chat', active: true }
+  {
+    id: 'deepseek',
+    name: 'DeepSeek V4 Flash',
+    type: 'deepseek',
+    endpoint: 'https://api.deepseek.com/v1',
+    apiKey: 'sk-please-replace-with-your-key',  // 占位，用户必须替换
+    modelName: 'deepseek-v4-flash',  // 更新为最新模型名称
+    active: true
+  }
 ];
 
 // ===== Toast =====
@@ -158,15 +165,14 @@ function getCurrentStructured() {
   };
 }
 
-// ===== FIX: 完善十八反十九畏检查（问题6） =====
+// ===== 十八反十九畏检查 =====
 function checkContraindications(composition) {
   const herbNames = composition.map(item => item.herb.trim());
-  // 别名映射（标准名 -> 别名列表）
   const aliasMap = {
     '乌头': ['乌头', '川乌', '草乌', '附子', '制附子', '白附片', '黑顺片'],
     '半夏': ['半夏', '法半夏', '姜半夏', '清半夏'],
     '贝母': ['贝母', '川贝母', '浙贝母'],
-    '瓜蒌': ['瓜蒌', '全瓜蒌', '天花粉'], // 天花粉是瓜蒌根
+    '瓜蒌': ['瓜蒌', '全瓜蒌', '天花粉'],
     '白及': ['白及', '白芨'],
     '白蔹': ['白蔹'],
     '海藻': ['海藻'],
@@ -180,7 +186,7 @@ function checkContraindications(composition) {
     '玄参': ['玄参', '元参'],
     '苦参': ['苦参'],
     '细辛': ['细辛'],
-    '白芍': ['白芍', '赤芍'], // 赤芍与白芍同科，但通常藜芦反白芍，赤芍是否反有争议，暂包含
+    '白芍': ['白芍', '赤芍'],
     '硫黄': ['硫黄', '硫磺'],
     '朴硝': ['朴硝', '芒硝', '元明粉'],
     '水银': ['水银'],
@@ -193,27 +199,25 @@ function checkContraindications(composition) {
     '郁金': ['郁金', '广郁金'],
     '牙硝': ['牙硝', '芒硝'],
     '京三棱': ['三棱', '京三棱'],
-    '犀角': ['犀角', '水牛角'], // 犀角现已禁用，但保留
+    '犀角': ['犀角', '水牛角'],
     '五灵脂': ['五灵脂'],
     '肉桂': ['肉桂', '桂皮'],
     '赤石脂': ['赤石脂'],
     '甘草': ['甘草', '炙甘草']
   };
 
-  // 规范化函数：将药材名转为标准名（取别名映射中的第一个）
   function normalize(herb) {
     for (let [standard, aliases] of Object.entries(aliasMap)) {
       if (aliases.includes(herb) || aliases.some(a => herb.includes(a))) {
         return standard;
       }
     }
-    return herb; // 未映射则返回原名称
+    return herb;
   }
   const normalized = herbNames.map(n => normalize(n));
 
   const contraindications = [];
 
-  // 十八反规则（使用标准名）
   const eighteenOpposites = [
     { herbs: ['乌头'], oppose: '半夏', msg: '乌头反半夏' },
     { herbs: ['乌头'], oppose: '贝母', msg: '乌头反贝母' },
@@ -233,7 +237,6 @@ function checkContraindications(composition) {
     { herbs: ['藜芦'], oppose: '白芍', msg: '藜芦反白芍' },
   ];
 
-  // 十九畏规则
   const nineteenFears = [
     { herbs: ['硫黄'], fear: '朴硝', msg: '硫黄畏朴硝' },
     { herbs: ['水银'], fear: '砒霜', msg: '水银畏砒霜' },
@@ -246,7 +249,6 @@ function checkContraindications(composition) {
     { herbs: ['肉桂'], fear: '赤石脂', msg: '肉桂畏赤石脂' },
   ];
 
-  // 检查十八反
   for (const rule of eighteenOpposites) {
     const hasHerb = rule.herbs.some(h => normalized.includes(h));
     const hasOppose = normalized.includes(rule.oppose);
@@ -254,8 +256,6 @@ function checkContraindications(composition) {
       contraindications.push(rule.msg);
     }
   }
-
-  // 检查十九畏
   for (const rule of nineteenFears) {
     const hasHerb = rule.herbs.some(h => normalized.includes(h));
     const hasFear = normalized.includes(rule.fear);
@@ -263,7 +263,6 @@ function checkContraindications(composition) {
       contraindications.push(rule.msg);
     }
   }
-
   return contraindications;
 }
 
@@ -287,8 +286,6 @@ async function generatePrescription() {
     showToast('请至少填写病史或患者基本信息');
     return;
   }
-
-  // 输入验证
   if (structured.history.length > 2000) {
     showToast('病史信息过长，请精简至2000字以内');
     return;
@@ -322,11 +319,13 @@ async function generatePrescription() {
   const flowId = styleSelect ? styleSelect.value : (settings.flows[0]?.id || '');
   const flow = settings.flows.find(f => f.id === flowId) || settings.flows[0];
   let stylePrompt = flow ? flow.prompt : '你是一位中医专家，请根据患者信息辨证论治，给出处方。';
+
+  const wrappedInfo = `【患者信息】\n${fullText}\n【结束】`;
   let prompt = `${stylePrompt}
 
-患者信息：${fullText}
+${wrappedInfo}
 
-请严格返回以下 JSON 格式，不要添加额外说明。
+请严格基于上述【患者信息】部分的内容进行辨证论治，不要参考其他信息。请严格返回以下 JSON 格式，不要添加额外说明。
 每个中药条目只包含 herb 和 dosage 两个字段，禁止添加括号注释。
 {
   "syndrome_analysis": "综合辨证分析",
@@ -367,7 +366,6 @@ async function generatePrescription() {
 
     let parsed = extractAndParseJSON(fullResponse);
     if (!parsed) {
-      // FIX: 改进错误提示（问题13）
       const preview = fullResponse.substring(0, 200) + (fullResponse.length > 200 ? '...' : '');
       throw new Error(`模型返回格式异常，无法解析为处方。请检查 API 配置或尝试重新生成。\n返回内容预览：${preview}`);
     }
@@ -388,13 +386,10 @@ async function generatePrescription() {
     if (resultActions) resultActions.classList.remove('hidden');
     showToast('处方生成成功');
 
-    // FIX: 自动保存时检查重复（问题11）
     if (settings.autoSave) {
-      // 获取最新一条历史记录
       const lastPage = await getHistoryPage(1);
       if (lastPage.length > 0) {
         const last = lastPage[0];
-        // 比较结果是否相同（通过 JSON 字符串比较）
         const currentStr = JSON.stringify(currentResult);
         const lastStr = JSON.stringify(last.result);
         if (currentStr === lastStr) {
@@ -476,12 +471,13 @@ function fallbackCopy(str) {
   document.body.removeChild(ta);
 }
 
-// ===== 历史记录（分页加载） =====
+// ===== 历史记录（分页加载 + 增量渲染） =====
 async function loadHistory() {
   historyItems = [];
-  historyLastItem = null; // FIX: 重置为 null
+  historyLastItem = null;
   hasMoreHistory = true;
   isLoadingHistory = false;
+  if (historyList) historyList.innerHTML = '';
   await loadMoreHistory();
 }
 
@@ -493,112 +489,118 @@ async function loadMoreHistory() {
     if (page.length < PAGE_SIZE) hasMoreHistory = false;
     if (page.length > 0) {
       historyItems = historyItems.concat(page);
-      historyLastItem = page[page.length - 1]; // FIX: 存储最后一条对象
+      historyLastItem = page[page.length - 1];
+      appendHistoryItems(page);
     } else {
       hasMoreHistory = false;
     }
-    renderHistoryPage();
   } catch (err) {
     showToast('加载历史失败：' + err.message);
-    // FIX: 错误时重置 isLoadingHistory，允许重试（问题4）
-    isLoadingHistory = false;
   } finally {
-    // FIX: 确保无论如何重置（问题4）
     isLoadingHistory = false;
+  }
+}
+
+function appendHistoryItems(items) {
+  if (!historyList) return;
+  const existingLoadMore = historyList.querySelector('#load-more-btn');
+  if (existingLoadMore) existingLoadMore.remove();
+
+  items.forEach(h => {
+    const itemDiv = createHistoryItemElement(h);
+    historyList.appendChild(itemDiv);
+  });
+
+  if (hasMoreHistory) {
+    const loadMoreDiv = document.createElement('div');
+    loadMoreDiv.className = 'load-more-container';
+    const btn = document.createElement('button');
+    btn.id = 'load-more-btn';
+    btn.className = 'btn-secondary';
+    btn.textContent = '加载更多';
+    btn.addEventListener('click', loadMoreHistory);
+    loadMoreDiv.appendChild(btn);
+    historyList.appendChild(loadMoreDiv);
+  }
+}
+
+function createHistoryItemElement(h) {
+  let preview = '';
+  if (h.structured) {
+    const name = h.structured.name || '无姓名';
+    const historyShort = (h.structured.history || '').substring(0, 20);
+    preview = `${name} - ${historyShort}...`;
+  } else if (h.fullText) {
+    preview = h.fullText.substring(0, 30) + '...';
+  } else {
+    preview = '旧记录';
+  }
+  const div = document.createElement('div');
+  div.className = 'history-item';
+  div.dataset.id = h.id;
+  div.innerHTML = `
+    <div class="info">
+      <span class="time">${new Date(h.timestamp).toLocaleString()}</span>
+      <span class="preview">${escapeHtml(preview)}</span>
+    </div>
+    <div class="actions">
+      <button class="view-history" data-id="${h.id}" title="查看">📄</button>
+      <button class="delete-history" data-id="${h.id}" title="删除">🗑️</button>
+    </div>
+  `;
+  div.querySelector('.view-history').addEventListener('click', () => viewHistoryItem(h.id));
+  div.querySelector('.delete-history').addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteHistoryItemHandler(h.id);
+  });
+  return div;
+}
+
+async function viewHistoryItem(id) {
+  const item = historyItems.find(h => h.id === id);
+  if (!item) return;
+  const currentHistory = patientHistory ? patientHistory.value.trim() : '';
+  if (currentHistory) {
+    if (!confirm('当前输入框中有未保存的病史信息，加载历史将覆盖，是否继续？')) {
+      return;
+    }
+  }
+  currentResult = item.result;
+  if (item.structured) {
+    if (patientName) patientName.value = item.structured.name || '';
+    if (patientGender) patientGender.value = item.structured.gender || '';
+    if (patientAge) patientAge.value = item.structured.age || '';
+    if (patientHistory) patientHistory.value = item.structured.history || '';
+  } else if (item.fullText) {
+    if (patientName) patientName.value = '';
+    if (patientGender) patientGender.value = '';
+    if (patientAge) patientAge.value = '';
+    if (patientHistory) patientHistory.value = item.fullText;
+  }
+  switchView('generate');
+  renderResult(currentResult);
+  if (resultContainer) resultContainer.classList.remove('hidden');
+  if (resultActions) resultActions.classList.remove('hidden');
+  showToast('已加载历史处方');
+}
+
+async function deleteHistoryItemHandler(id) {
+  if (confirm('确定删除这条历史记录？')) {
+    await deleteHistoryItem(id);
+    historyItems = historyItems.filter(h => h.id !== id);
+    await loadHistory();
+    showToast('已删除');
   }
 }
 
 function renderHistoryPage() {
   if (!historyList) return;
+  historyList.innerHTML = '';
   if (historyItems.length === 0) {
     historyList.innerHTML = '<p style="text-align:center;color:var(--text-muted);">暂无历史记录</p>';
     return;
   }
-  let html = historyItems.map(h => {
-    let preview = '';
-    if (h.structured) {
-      const name = h.structured.name || '无姓名';
-      const historyShort = (h.structured.history || '').substring(0, 20);
-      preview = `${name} - ${historyShort}...`;
-    } else if (h.fullText) {
-      preview = h.fullText.substring(0, 30) + '...';
-    } else {
-      preview = '旧记录';
-    }
-    return `
-      <div class="history-item" data-id="${h.id}">
-        <div class="info">
-          <span class="time">${new Date(h.timestamp).toLocaleString()}</span>
-          <span class="preview">${escapeHtml(preview)}</span>
-        </div>
-        <div class="actions">
-          <button class="view-history" data-id="${h.id}" title="查看">📄</button>
-          <button class="delete-history" data-id="${h.id}" title="删除">🗑️</button>
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  if (hasMoreHistory) {
-    html += `<div class="load-more-container"><button id="load-more-btn" class="btn-secondary">加载更多</button></div>`;
-  }
-  historyList.innerHTML = html;
-
-  // 事件绑定（使用事件委托）
-  historyList.querySelectorAll('.view-history').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const id = btn.dataset.id;
-      const item = historyItems.find(h => h.id === id);
-      if (!item) return;
-      // FIX: 检查当前输入是否有内容，防止未保存丢失（问题14）
-      const currentHistory = patientHistory ? patientHistory.value.trim() : '';
-      if (currentHistory) {
-        if (!confirm('当前输入框中有未保存的病史信息，加载历史将覆盖，是否继续？')) {
-          return;
-        }
-      }
-      if (patientHistory && patientHistory.value.trim() && !confirm('当前未保存的处方将被覆盖，确定查看？')) return;
-      currentResult = item.result;
-      if (item.structured) {
-        if (patientName) patientName.value = item.structured.name || '';
-        if (patientGender) patientGender.value = item.structured.gender || '';
-        if (patientAge) patientAge.value = item.structured.age || '';
-        if (patientHistory) patientHistory.value = item.structured.history || '';
-      } else if (item.fullText) {
-        if (patientName) patientName.value = '';
-        if (patientGender) patientGender.value = '';
-        if (patientAge) patientAge.value = '';
-        if (patientHistory) patientHistory.value = item.fullText;
-      }
-      switchView('generate');
-      renderResult(currentResult);
-      if (resultContainer) resultContainer.classList.remove('hidden');
-      if (resultActions) resultActions.classList.remove('hidden');
-      showToast('已加载历史处方');
-    });
-  });
-
-  historyList.querySelectorAll('.delete-history').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const id = btn.dataset.id;
-      if (confirm('确定删除这条历史记录？')) {
-        await deleteHistoryItem(id);
-        historyItems = historyItems.filter(h => h.id !== id);
-        if (historyItems.length === 0) {
-          await loadHistory();
-        } else {
-          renderHistoryPage();
-        }
-        showToast('已删除');
-      }
-    });
-  });
-
-  const loadMoreBtn = historyList.querySelector('#load-more-btn');
-  if (loadMoreBtn) {
-    loadMoreBtn.addEventListener('click', loadMoreHistory);
-  }
+  appendHistoryItems(historyItems);
 }
 
 // ===== 设置页面渲染 =====
@@ -607,7 +609,6 @@ function renderSettings() {
   try {
     modelsContainer.innerHTML = settings.models.map((m) => {
       const hasKey = m.apiKey && m.apiKey.length > 0;
-      // FIX: 如果 apiKey 为空，显示“未设置”（问题8）
       const placeholder = hasKey ? '已设置，留空不变' : '未设置，请输入';
       return `
         <div class="model-item" data-id="${m.id}">
@@ -615,9 +616,7 @@ function renderSettings() {
           <label>类型：
             <select class="model-type">
               <option value="deepseek" ${m.type==='deepseek'?'selected':''}>DeepSeek</option>
-              <option value="openai" ${m.type==='openai'?'selected':''}>OpenAI</option>
-              <option value="qwen" ${m.type==='qwen'?'selected':''}>通义千问</option>
-              <option value="ernie" ${m.type==='ernie'?'selected':''}>文心一言</option>
+              <option value="qwen" ${m.type==='qwen'?'selected':''}>通义千问 (Qwen)</option>
             </select>
           </label>
           <label>Endpoint：<input type="text" class="model-endpoint" value="${escapeHtml(m.endpoint||'')}" placeholder="留空则默认" /></label>
@@ -656,7 +655,6 @@ function renderSettings() {
       });
     });
 
-    // FIX: 使用静态导入的 callLLM 测试（问题9）
     modelsContainer.querySelectorAll('.test-model').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         const item = e.target.closest('.model-item');
@@ -712,7 +710,6 @@ function renderSettings() {
   }
 }
 
-// ===== 测试模型（使用静态导入的 callLLM） =====
 async function testModel(modelItem) {
   const nameInput = modelItem.querySelector('.model-name');
   const typeSelect = modelItem.querySelector('.model-type');
@@ -725,9 +722,7 @@ async function testModel(modelItem) {
   let endpoint = endpointInput.value;
   const defaultEndpoints = {
     deepseek: 'https://api.deepseek.com/v1',
-    openai: 'https://api.openai.com/v1',
-    qwen: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
-    ernie: ''
+    qwen: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
   };
   if (!endpoint && defaultEndpoints[type]) endpoint = defaultEndpoints[type];
   let apiKey = keyInput.value;
@@ -750,7 +745,6 @@ async function testModel(modelItem) {
   const timeoutId = setTimeout(() => controller.abort(), 10000);
 
   try {
-    // FIX: 直接使用静态导入的 callLLM（问题9）
     const response = await callLLM(config, '请只回复“OK”', controller.signal);
     clearTimeout(timeoutId);
     if (response && response.includes('OK')) {
@@ -770,7 +764,7 @@ async function testModel(modelItem) {
 function init() {
   console.log('应用初始化开始');
   try {
-    // 获取所有 DOM 引用
+    // 获取 DOM 引用
     viewGenerate = document.getElementById('view-generate');
     viewHistory = document.getElementById('view-history');
     viewSettings = document.getElementById('view-settings');
@@ -812,7 +806,7 @@ function init() {
     settings = loadSettings();
     console.log('设置加载完成:', settings);
 
-    // 应用主题
+    // 主题
     const savedTheme = getTheme();
     applyTheme(savedTheme);
     if (themeToggle) {
@@ -835,7 +829,7 @@ function init() {
     // 设置默认时间
     setDefaultDateRange();
 
-    // 绑定导航事件
+    // 导航事件
     navBtns.forEach(btn => {
       btn.addEventListener('click', function() {
         const view = this.dataset.view;
@@ -843,7 +837,7 @@ function init() {
       });
     });
 
-    // 绑定生成相关事件
+    // 生成事件
     if (generateBtn) generateBtn.addEventListener('click', generatePrescription);
     if (cancelBtn) cancelBtn.addEventListener('click', () => {
       if (abortController) {
@@ -851,7 +845,6 @@ function init() {
         showToast('正在取消...');
       }
     });
-    // FIX: 重试按钮清空旧结果（问题10）
     if (retryBtn) {
       retryBtn.addEventListener('click', () => {
         if (resultContainer) {
@@ -881,7 +874,7 @@ function init() {
       showToast('已保存到历史');
     });
 
-    // 绑定历史事件
+    // 历史事件
     if (clearHistoryBtn) {
       clearHistoryBtn.addEventListener('click', async () => {
         if (confirm('确定清空所有历史记录？')) {
@@ -893,7 +886,6 @@ function init() {
         }
       });
     }
-    // FIX: 导出 CSV 支持空时间范围（问题15）
     if (exportBtn) {
       exportBtn.addEventListener('click', async () => {
         let startVal = exportStart ? exportStart.value : '';
@@ -983,7 +975,6 @@ function init() {
         renderFlowsSelect();
       });
     }
-    // FIX: 保存设置时允许清空 API Key（问题8）
     if (saveSettingsBtn) {
       saveSettingsBtn.addEventListener('click', () => {
         // 收集模型
@@ -996,19 +987,15 @@ function init() {
           let endpoint = item.querySelector('.model-endpoint').value;
           const defaultEndpoints = {
             deepseek: 'https://api.deepseek.com/v1',
-            openai: 'https://api.openai.com/v1',
-            qwen: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
-            ernie: ''
+            qwen: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
           };
           if (!endpoint && defaultEndpoints[type]) endpoint = defaultEndpoints[type];
           const modelName = item.querySelector('.model-modelname').value;
           const keyInput = item.querySelector('.model-apikey');
           let apiKey = keyInput.value;
           if (apiKey === '') {
-            // 用户清空，则设为空字符串
-            apiKey = '';
+            apiKey = keyInput.dataset.original || '';
           } else {
-            // 否则编码保存
             apiKey = utf8ToBase64(apiKey);
           }
           const active = item.querySelector('.model-active').checked;
@@ -1048,18 +1035,100 @@ function init() {
           setTimeout(() => saveStatus.textContent = '', 2000);
         }
         showToast('设置已保存');
+
+        // 若使用 Qwen，提示跨域问题
+        const hasQwen = models.some(m => m.type === 'qwen' && m.apiKey);
+        if (hasQwen) {
+          showToast('注意：通义千问 API 可能存在跨域限制，建议使用代理或自建后端转发', 4000);
+        }
       });
     }
 
-    // 默认切换到生成视图
+    // 默认视图
     switchView('generate');
     console.log('应用初始化完成');
 
-    // 注册 Service Worker
+    // Service Worker 注册与更新提示
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js')
-        .then(reg => console.log('Service Worker registered', reg))
+        .then(reg => {
+          console.log('Service Worker registered', reg);
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                showToast('新版本已下载，请刷新页面以使用最新功能', 5000);
+              }
+            });
+          });
+        })
         .catch(err => console.error('Service Worker registration failed', err));
+    }
+
+    // 安装引导（Android + iOS）
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      showInstallBanner(true);
+    });
+
+    if (window.navigator.standalone === false) {
+      showIosInstallGuide();
+    }
+
+    function showInstallBanner(show) {
+      if (!show) {
+        const banner = document.getElementById('install-banner');
+        if (banner) banner.remove();
+        return;
+      }
+      if (document.getElementById('install-banner')) return;
+      const banner = document.createElement('div');
+      banner.id = 'install-banner';
+      banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);padding:12px 16px;box-shadow:0 -2px 10px rgba(0,0,0,0.2);display:flex;justify-content:space-between;align-items:center;z-index:10000;';
+      banner.innerHTML = `
+        <span>📲 安装应用以获得更好体验</span>
+        <div>
+          <button id="install-btn" class="btn-primary" style="margin-right:8px;">安装</button>
+          <button id="close-install-banner" class="btn-secondary">关闭</button>
+        </div>
+      `;
+      document.body.appendChild(banner);
+      document.getElementById('install-btn').addEventListener('click', async () => {
+        if (deferredPrompt) {
+          deferredPrompt.prompt();
+          const result = await deferredPrompt.userChoice;
+          if (result.outcome === 'accepted') {
+            showToast('应用已添加至主屏幕');
+          }
+          deferredPrompt = null;
+          showInstallBanner(false);
+        }
+      });
+      document.getElementById('close-install-banner').addEventListener('click', () => {
+        showInstallBanner(false);
+      });
+    }
+
+    function showIosInstallGuide() {
+      if (localStorage.getItem('ios_install_guide_shown')) return;
+      const guide = document.createElement('div');
+      guide.id = 'ios-install-guide';
+      guide.style.cssText = 'position:fixed;bottom:70px;left:20px;right:20px;background:var(--bg-card);padding:16px;border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:10000;border:1px solid var(--border-color);';
+      guide.innerHTML = `
+        <p style="margin:0 0 8px;">📱 添加到主屏幕：</p>
+        <ol style="margin:0 0 12px 20px;font-size:14px;">
+          <li>点击底部「分享」按钮</li>
+          <li>选择「添加到主屏幕」</li>
+        </ol>
+        <button id="close-ios-guide" class="btn-secondary" style="float:right;">知道了</button>
+      `;
+      document.body.appendChild(guide);
+      document.getElementById('close-ios-guide').addEventListener('click', () => {
+        guide.remove();
+        localStorage.setItem('ios_install_guide_shown', 'true');
+      });
     }
 
   } catch (err) {

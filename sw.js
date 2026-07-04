@@ -1,6 +1,5 @@
 // sw.js
-// FIX: 升级版本号，触发缓存更新
-const CACHE_NAME = 'prescription-cache-v2'; // v1 -> v2
+const CACHE_NAME = 'prescription-cache-v2';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -18,7 +17,7 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(urlsToCache))
-      .then(() => self.skipWaiting()) // FIX: 强制激活
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -29,13 +28,27 @@ self.addEventListener('activate', event => {
         keys.filter(key => key !== CACHE_NAME)
             .map(key => caches.delete(key))
       );
-    }).then(() => self.clients.claim()) // FIX: 立即控制所有客户端
+    }).then(() => self.clients.claim())
   );
 });
 
+// Stale-While-Revalidate
 self.addEventListener('fetch', event => {
   event.respondWith(
-    caches.match(event.request)
-      .then(response => response || fetch(event.request))
+    caches.match(event.request).then(cachedResponse => {
+      const fetchPromise = fetch(event.request).then(networkResponse => {
+        // 更新缓存
+        caches.open(CACHE_NAME).then(cache => {
+          cache.put(event.request, networkResponse.clone());
+        });
+        return networkResponse;
+      }).catch(() => {
+        // 网络失败时返回缓存（如果有）
+        if (cachedResponse) return cachedResponse;
+        throw new Error('Network error');
+      });
+      // 如果有缓存则立即返回，否则等待网络
+      return cachedResponse || fetchPromise;
+    })
   );
 });

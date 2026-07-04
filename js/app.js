@@ -34,21 +34,21 @@ let hasMoreHistory = true;
 let isLoadingHistory = false;
 const PAGE_SIZE = 20;
 
-// 默认设置（仅 DeepSeek 和 Qwen）
+// 默认设置（仅 DeepSeek）
 const DEFAULT_FLOWS = [
   { id: 'jingfang', name: '经方派', prompt: '你是一位经方派中医专家，精通《伤寒杂病论》，请根据患者信息辨证论治，给出经方加减。' },
   { id: 'shifang', name: '时方派', prompt: '你是一位时方派中医专家，注重卫气营血和三焦辨证，请为患者开具时方。' },
   { id: 'comprehensive', name: '学院派', prompt: '你是一位学院派中西医结合专家，请综合脏腑、八纲、气血津液进行辨证，提供治疗方案。' }
 ];
 
+// 默认模型：仅 DeepSeek，API Key 为空，用户必须填入
 const DEFAULT_MODELS = [
   {
     id: 'deepseek',
-    name: 'DeepSeek V4 Flash',
-    type: 'deepseek',
-    endpoint: 'https://api.deepseek.com/v1',
-    apiKey: 'sk-please-replace-with-your-key',  // 占位，用户必须替换
-    modelName: 'deepseek-v4-flash',  // 更新为最新模型名称
+    name: 'DeepSeek V4',
+    endpoint: 'https://api.deepseek.com',
+    apiKey: '',                // 用户需手动填写
+    modelName: 'deepseek-v4-flash',  // 可改为 deepseek-v4-pro
     active: true
   }
 ];
@@ -81,7 +81,7 @@ function applyTheme(theme) {
   if (themeToggle) themeToggle.textContent = isDark ? '☀️' : '🌙';
 }
 
-// ===== 加载设置 =====
+// ===== 加载设置（迁移旧数据） =====
 function loadSettings() {
   let saved = getSettings();
   if (!saved) {
@@ -92,11 +92,29 @@ function loadSettings() {
       autoSave: false
     };
     saveSettings(saved);
+    return saved;
   }
-  if (!saved.models) saved.models = DEFAULT_MODELS;
-  if (!saved.flows) saved.flows = DEFAULT_FLOWS;
+  // 迁移：过滤掉非 deepseek 模型，只保留 deepseek 类型
+  if (saved.models) {
+    saved.models = saved.models.filter(m => m.type === 'deepseek' || !m.type);
+    // 如果过滤后为空，则填入默认
+    if (saved.models.length === 0) {
+      saved.models = DEFAULT_MODELS;
+    } else {
+      // 确保每个模型都有必要字段
+      saved.models = saved.models.map(m => ({
+        ...DEFAULT_MODELS[0], // 继承默认字段
+        ...m,
+        type: 'deepseek'      // 强制类型
+      }));
+    }
+  } else {
+    saved.models = DEFAULT_MODELS;
+  }
+  if (!saved.flows || saved.flows.length === 0) saved.flows = DEFAULT_FLOWS;
   if (!saved.defaultFlowId && saved.flows.length) saved.defaultFlowId = saved.flows[0].id;
   if (saved.autoSave === undefined) saved.autoSave = false;
+  saveSettings(saved);
   return saved;
 }
 
@@ -165,7 +183,7 @@ function getCurrentStructured() {
   };
 }
 
-// ===== 十八反十九畏检查 =====
+// ===== 十八反十九畏检查（不变） =====
 function checkContraindications(composition) {
   const herbNames = composition.map(item => item.herb.trim());
   const aliasMap = {
@@ -604,41 +622,46 @@ function renderHistoryPage() {
 }
 
 // ===== 设置页面渲染 =====
-// 辅助函数（放在 renderSettings 之前）
-function getDefaultEndpoint(type) {
-  if (type === 'deepseek') return 'https://api.deepseek.com/v1';
-  if (type === 'qwen') return 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
-  return '';
+// 辅助函数
+function getDefaultEndpoint() {
+  return 'https://api.deepseek.com/v1';
 }
 
-function getDefaultModelName(type) {
-  if (type === 'deepseek') return 'deepseek-v4-flash';
-  if (type === 'qwen') return 'qwen-plus';
-  return '';
+function getDefaultModelName() {
+  return 'deepseek-v4-flash';
 }
 
 function renderSettings() {
   if (!modelsContainer || !flowsContainer) return;
   try {
-    // -------- 渲染模型卡片 --------
+    // 在设置顶部添加安全提示
+    const securityTip = document.getElementById('security-tip');
+    if (!securityTip) {
+      const tip = document.createElement('div');
+      tip.id = 'security-tip';
+      tip.style.cssText = 'background: #fff3cd; padding: 10px; border-radius: var(--radius-md); margin-bottom: 16px; color: #856404;';
+      tip.innerHTML = `
+        <strong>🔐 API Key 安全提示：</strong>
+        API Key 仅以 Base64 编码存储于您浏览器的本地存储中，<strong>不会上传至任何服务器</strong>。
+        请勿将设备或浏览器信息泄露给他人，并定期更换 Key。
+      `;
+      modelsContainer.parentNode.insertBefore(tip, modelsContainer);
+    }
+
+    // -------- 渲染模型卡片（固定 DeepSeek 类型） --------
     modelsContainer.innerHTML = settings.models.map((m) => {
       const hasKey = m.apiKey && m.apiKey.length > 0;
-      const placeholder = hasKey ? '已设置，留空不变' : '未设置，请输入';
-      const defaultEndpoint = getDefaultEndpoint(m.type);
-      const defaultModelName = getDefaultModelName(m.type);
-      const endpointVal = m.endpoint || defaultEndpoint;
-      const modelNameVal = m.modelName || defaultModelName;
+      const placeholder = hasKey ? '已设置，留空不变' : '请输入您的 DeepSeek API Key';
+      const endpointVal = m.endpoint || getDefaultEndpoint();
+      const modelNameVal = m.modelName || getDefaultModelName();
       return `
         <div class="model-item" data-id="${m.id}">
           <label>名称：<input type="text" class="model-name" value="${escapeHtml(m.name)}" /></label>
-          <label>类型：
-            <select class="model-type">
-              <option value="deepseek" ${m.type==='deepseek'?'selected':''}>DeepSeek</option>
-              <option value="qwen" ${m.type==='qwen'?'selected':''}>通义千问 (Qwen)</option>
-            </select>
-          </label>
-          <label>Endpoint：<input type="text" class="model-endpoint" value="${escapeHtml(endpointVal)}" placeholder="留空则默认" /></label>
-          <label>模型名：<input type="text" class="model-modelname" value="${escapeHtml(modelNameVal)}" placeholder="可选" /></label>
+          <div style="margin: 4px 0; font-size: 14px; color: var(--text-secondary);">
+            <span>类型：DeepSeek（OpenAI 兼容）</span>
+          </div>
+          <label>Endpoint：<input type="text" class="model-endpoint" value="${escapeHtml(endpointVal)}" placeholder="留空则使用默认" /></label>
+          <label>模型名：<input type="text" class="model-modelname" value="${escapeHtml(modelNameVal)}" placeholder="如 deepseek-v4-flash / deepseek-v4-pro" /></label>
           <label>API Key：<input type="password" class="model-apikey" placeholder="${placeholder}" data-original="${escapeHtml(m.apiKey||'')}" /></label>
           <div class="default-checkbox">
             <input type="checkbox" class="model-active" ${m.active ? 'checked' : ''}>
@@ -651,7 +674,7 @@ function renderSettings() {
       `;
     }).join('');
 
-    // -------- 绑定删除、默认复选框、测试连接事件（与原逻辑相同） --------
+    // -------- 绑定事件 --------
     modelsContainer.querySelectorAll('.delete-model').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const item = e.target.closest('.model-item');
@@ -681,19 +704,7 @@ function renderSettings() {
       });
     });
 
-    // ========== FIX: 绑定类型切换事件，自动更新默认 Endpoint 和 模型名 ==========
-    modelsContainer.querySelectorAll('.model-item').forEach(item => {
-      const select = item.querySelector('.model-type');
-      const endpointInput = item.querySelector('.model-endpoint');
-      const modelNameInput = item.querySelector('.model-modelname');
-      select.addEventListener('change', function() {
-        const type = this.value;
-        endpointInput.value = getDefaultEndpoint(type);
-        modelNameInput.value = getDefaultModelName(type);
-      });
-    });
-
-    // -------- 渲染流派（与原逻辑相同） --------
+    // -------- 渲染流派（不变） --------
     flowsContainer.innerHTML = settings.flows.map((flow) => {
       const isDefault = (flow.id === settings.defaultFlowId);
       const isBuiltin = ['jingfang','shifang','comprehensive'].includes(flow.id);
@@ -744,19 +755,12 @@ function renderSettings() {
 
 async function testModel(modelItem) {
   const nameInput = modelItem.querySelector('.model-name');
-  const typeSelect = modelItem.querySelector('.model-type');
   const endpointInput = modelItem.querySelector('.model-endpoint');
   const modelNameInput = modelItem.querySelector('.model-modelname');
   const keyInput = modelItem.querySelector('.model-apikey');
   const resultSpan = modelItem.querySelector('.test-result');
 
-  const type = typeSelect.value;
-  let endpoint = endpointInput.value;
-  const defaultEndpoints = {
-    deepseek: 'https://api.deepseek.com/v1',
-    qwen: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
-  };
-  if (!endpoint && defaultEndpoints[type]) endpoint = defaultEndpoints[type];
+  let endpoint = endpointInput.value || getDefaultEndpoint();
   let apiKey = keyInput.value;
   if (!apiKey) {
     const orig = keyInput.dataset.original || '';
@@ -767,8 +771,8 @@ async function testModel(modelItem) {
       return;
     }
   }
-  const modelName = modelNameInput.value || '';
-  const config = { type, endpoint, apiKey, modelName };
+  const modelName = modelNameInput.value || getDefaultModelName();
+  const config = { endpoint, apiKey, modelName };
 
   resultSpan.textContent = '⏳ 测试中...';
   const btn = modelItem.querySelector('.test-model');
@@ -981,11 +985,10 @@ function init() {
       addModelBtn.addEventListener('click', () => {
         const newModel = {
           id: 'model_' + Date.now(),
-          name: '新模型',
-          type: 'deepseek',
-          endpoint: '',
+          name: 'DeepSeek 模型',
+          endpoint: getDefaultEndpoint(),
           apiKey: '',
-          modelName: '',
+          modelName: getDefaultModelName(),
           active: false
         };
         settings.models.push(newModel);
@@ -1015,14 +1018,9 @@ function init() {
         for (const item of modelItems) {
           const id = item.dataset.id;
           const name = item.querySelector('.model-name').value.trim();
-          const type = item.querySelector('.model-type').value;
-          let endpoint = item.querySelector('.model-endpoint').value;
-          const defaultEndpoints = {
-            deepseek: 'https://api.deepseek.com/v1',
-            qwen: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
-          };
-          if (!endpoint && defaultEndpoints[type]) endpoint = defaultEndpoints[type];
-          const modelName = item.querySelector('.model-modelname').value;
+          let endpoint = item.querySelector('.model-endpoint').value.trim();
+          if (!endpoint) endpoint = getDefaultEndpoint();
+          const modelName = item.querySelector('.model-modelname').value.trim() || getDefaultModelName();
           const keyInput = item.querySelector('.model-apikey');
           let apiKey = keyInput.value;
           if (apiKey === '') {
@@ -1031,7 +1029,7 @@ function init() {
             apiKey = utf8ToBase64(apiKey);
           }
           const active = item.querySelector('.model-active').checked;
-          models.push({ id, name, type, endpoint, apiKey, modelName, active });
+          models.push({ id, name, type: 'deepseek', endpoint, apiKey, modelName, active });
         }
         if (models.length === 0) {
           showToast('至少保留一个模型');
@@ -1067,12 +1065,6 @@ function init() {
           setTimeout(() => saveStatus.textContent = '', 2000);
         }
         showToast('设置已保存');
-
-        // 若使用 Qwen，提示跨域问题
-        const hasQwen = models.some(m => m.type === 'qwen' && m.apiKey);
-        if (hasQwen) {
-          showToast('注意：通义千问 API 可能存在跨域限制，建议使用代理或自建后端转发', 4000);
-        }
       });
     }
 

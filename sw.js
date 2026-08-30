@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_NAME = 'prescription-cache-v5';
+const CACHE_NAME = 'prescription-cache-v6';
 const urlsToCache = [
   '/',
   '/index.html',

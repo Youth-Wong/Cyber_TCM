@@ -385,7 +385,7 @@ async function generatePrescription() {
     showToast('API Key 未配置或无效，请先在设置中填写。', 4000);
     return;
   }
-  const modelConfig = { ...activeModel, apiKey };
+  const modelConfig = { ...activeModel, apiKey, responseFormat: 'json_object' };
 
   // 构建 Prompt
   const avoid = avoidContraCheck.checked;
@@ -453,6 +453,9 @@ async function generatePrescription() {
       showToast('已取消生成');
       retryBtn.style.display = 'inline-block';
       return;
+    }
+    if (!fullResponse.trim()) {
+      throw new Error('模型未返回有效内容，请重试或检查模型配置。');
     }
 
     let parsed = extractAndParseJSON(fullResponse);

@@ -1,6 +1,6 @@
 # 中医处方智能助手 (Cyber TCM)
 
-AI 辅助中医辨证开方的渐进式 Web 应用（PWA）。基于大语言模型，结合患者四诊信息智能生成中药处方，支持多种国产大模型、自定义处方流派、历史记录管理与 API Key 加密存储。
+AI 辅助中医辨证开方的渐进式 Web 应用（PWA）。基于大语言模型，结合患者四诊信息智能生成中药处方，支持多种国产大模型、自定义处方流派、历史记录管理与 API Key 本地配置。
 
 ## 功能特性
 
@@ -9,8 +9,9 @@ AI 辅助中医辨证开方的渐进式 Web 应用（PWA）。基于大语言模
 - **用药安全**：可开启「禁止十八反十九畏」选项；支持「精品中药（5g 整数倍）」剂量模式
 - **多模型支持**：内置 DeepSeek、通义千问 (Qwen)、Kimi (Moonshot)、小米 MiMo 四家国产模型，均走 OpenAI 兼容接口，可自定义接口地址与模型名称
 - **历史记录**：处方记录保存在本地 IndexedDB，支持按姓名、关键字、时间范围搜索，可分页浏览并导出 CSV
-- **🔐 密码保险箱**：API Key 使用 Web Crypto（PBKDF2 600,000 次迭代 + AES-GCM）加密后存储，刷新页面后需重新解锁，密码永不落盘
-- **离线可用**：Service Worker 缓存全部静态资源，支持离线访问与安装到桌面/主屏幕
+- **简化密钥配置**：在设置页直接填写 API Key，无密码与解锁流程，保存时自动进行 Base64 混淆
+- **默认 DeepSeek 额度**：可内置一个默认 DeepSeek API Key，每个浏览器站点数据每日最多调用 100 次
+- **离线可用**：Service Worker 缓存全部静态资源，不再主动显示安装应用提示
 - **主题切换**：浅色 / 深色 / 跟随系统三种主题模式
 
 ## 技术栈
@@ -18,10 +19,9 @@ AI 辅助中医辨证开方的渐进式 Web 应用（PWA）。基于大语言模
 纯原生前端，无任何构建步骤、无框架依赖：
 
 - HTML + CSS + JavaScript（ES Modules）
-- Web Crypto API（API Key 加密）
 - IndexedDB（历史记录存储）
-- localStorage（设置与加密密钥存储）
-- Service Worker + Web App Manifest（PWA 离线与安装）
+- localStorage（设置、Base64 密钥与每日调用次数）
+- Service Worker + Web App Manifest（PWA 离线能力）
 
 ## 快速开始
 
@@ -48,11 +48,17 @@ python -m http.server 8080
 
 进入「设置」页：
 
-1. 选择要使用的模型供应商（DeepSeek / Qwen / Kimi / 小米），填入对应的 API Key
+1. 选择要使用的模型供应商（DeepSeek / Qwen / Kimi / 小米），直接填入对应的原始 API Key
 2. 可选：自定义接口地址（默认已填官方地址）与模型名称
 3. 点击「保存设置」，并将所需模型设为默认
 
-> 设置密码保险箱后，API Key 将不再以明文保存，而是加密存储；解锁状态仅在本次会话有效。
+设置页不展示编码细节；保存时应用会自动将 API Key 转为带 `b64:` 前缀的 Base64 文本并写入本地设置。
+
+如需配置项目自带的默认 DeepSeek API Key：
+
+1. 将 Key 转为 Base64，例如在浏览器控制台执行 `btoa('sk-...')`
+2. 把结果填入 `js/config.js` 的 `DEFAULT_DEEPSEEK_API_KEY_BASE64`
+3. 默认 Key 会自动启用每个浏览器每日 100 次的本地调用限制；用户自行填写的 Key 不受此限制
 
 ### 2. 智能开方
 
@@ -75,12 +81,12 @@ python -m http.server 8080
 ├── css/
 │   └── app.css         # 全部样式（含深色主题）
 ├── js/
+│   ├── config.js       # 默认 DeepSeek Key（Base64）与每日额度
 │   ├── app.js          # 主逻辑（视图、交互、生成流程）
 │   └── utils/
 │       ├── storage.js        # 设置存储与 IndexedDB 历史记录
 │       ├── llm-adapter.js    # LLM 调用适配（OpenAI 兼容，支持流式）
-│       ├── vault.js          # 密码保险箱（加密/解锁/改密）
-│       ├── crypto-helper.js  # Web Crypto 加解密（PBKDF2 + AES-GCM）
+│       ├── daily-quota.js    # 默认 DeepSeek Key 的本地每日计数
 │       └── encoding.js       # Base64/UTF-8 编码转换
 └── icons/
     ├── icon-192.png
@@ -89,9 +95,9 @@ python -m http.server 8080
 
 ## 数据与隐私
 
-- 所有数据（设置、API Key、历史记录）均保存在浏览器本地，**不经过任何服务器**
-- 生成请求直接由浏览器发往所选模型的官方 API 接口
-- API Key 启用保险箱后以 PBKDF2（600,000 次迭代）+ AES-GCM 加密存储，解锁密码不会写入存储
+- 所有设置和历史记录均保存在浏览器本地；生成请求直接由浏览器发往所选模型的官方 API 接口
+- API Key 仅经 Base64 混淆，任何能访问页面源码或浏览器存储的人都可以还原它
+- 每日 100 次限制基于浏览器 `localStorage`，清除站点数据、更换浏览器或直接修改前端代码都可绕过；如需不可绕过的配额与密钥保护，必须由后端代理执行
 - 清除浏览器站点数据即清除全部历史与配置
 
 ## 免责声明

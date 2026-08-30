@@ -1,9 +1,9 @@
 // js/app.js
 import {
-  getSettings,
   saveSettings,
   loadSettings,
   DEFAULT_FLOWS,
+  DEFAULT_DEEPSEEK_API_KEY,
   getAllHistory,
   getHistoryPage,
   getHistoryCount,
@@ -15,7 +15,8 @@ import {
 } from './utils/storage.js';
 import { callLLM, callLLMStream } from './utils/llm-adapter.js';
 import { utf8ToBase64, base64ToUtf8 } from './utils/encoding.js';
-import * as vault from './utils/vault.js';
+import { getDailyQuotaStatus } from './utils/daily-quota.js';
+import { DEFAULT_DEEPSEEK_DAILY_LIMIT } from './config.js';
 
 // ===== DOM 引用 =====
 let styleSelect, patientName, patientGender, patientAge, patientHistory;
@@ -26,9 +27,7 @@ let historyList, clearHistoryBtn, exportStart, exportEnd, exportBtn;
 let searchName, searchKeyword, searchStart, searchEnd, searchBtn, clearSearchBtn;
 let modelsContainer, addModelBtn, flowsContainer, addFlowBtn;
 let autoSaveCheck, saveSettingsBtn, saveStatus, themeSelect, maxInputLengthEl;
-let vaultStatusBtn, themeToggle, toastEl;
-let unlockOverlay, unlockPwd, unlockConfirmOverlay, unlockCancelOverlay, unlockError;
-let vaultSetBtn, vaultUnlockBtn, vaultLockBtn, vaultResetBtn, vaultMessage;
+let themeToggle, toastEl, dailyQuotaInfo;
 
 // ===== 状态 =====
 let settings = null;
@@ -132,18 +131,6 @@ function switchView(viewId) {
   if (viewId === 'settings') renderSettings();
 }
 
-// ===== 保险箱覆盖层 =====
-function openVaultOverlay() {
-  if (!unlockOverlay) return;
-  unlockOverlay.classList.remove('hidden');
-  if (unlockPwd) unlockPwd.value = '';
-  if (unlockError) unlockError.textContent = '';
-  setTimeout(() => { if (unlockPwd) unlockPwd.focus(); }, 50);
-}
-function closeVaultOverlay() {
-  if (unlockOverlay) unlockOverlay.classList.add('hidden');
-}
-
 // ===== 生成处方 =====
 function buildPatientInfoForModel() {
   const gender = patientGender.value;
@@ -181,6 +168,21 @@ function updateCharCounter() {
   const len = getPatientInfoLength();
   charCounter.textContent = `${len} 字符`;
   charCounter.style.color = len > maxInputLength ? 'var(--accent-danger)' : 'var(--text-muted)';
+}
+
+function updateDailyQuotaUI() {
+  if (!dailyQuotaInfo || !settings) return;
+  if (!DEFAULT_DEEPSEEK_API_KEY) {
+    dailyQuotaInfo.textContent = '默认 DeepSeek API Key 尚未配置；请在 js/config.js 中填入 Base64 Key。';
+    return;
+  }
+  const activeModel = settings.models.find(model => model.id === settings.activeModelId);
+  if (!activeModel?.useDailyLimit) {
+    dailyQuotaInfo.textContent = '自定义 API Key 不受本地每日次数限制。';
+    return;
+  }
+  const status = getDailyQuotaStatus(activeModel.dailyLimit);
+  dailyQuotaInfo.textContent = `默认 DeepSeek API：今日已用 ${status.used}/${status.limit} 次，剩余 ${status.remaining} 次。`;
 }
 
 // ===== 十八反十九畏检查（别名扩充） =====
@@ -374,39 +376,13 @@ async function generatePrescription() {
     }
   }
 
-  // 安全获取 API Key
-  let apiKey;
-  const hasVault = vault.hasVaultPassword();
-  if (hasVault) {
-    if (!vault.isVaultUnlocked()) {
-      showToast('密码保险箱已锁定，请先解锁后重试。', 4000);
-      openVaultOverlay();
-      return;
-    }
-    const plainKey = vault.getApiKeyForModel(activeModel.id);
-    if (!plainKey || plainKey.length < 10) {
-      showToast(`模型 "${activeModel.name}" 的 API Key 未正确存入保险箱，请在设置中重新保存。`, 4000);
-      return;
-    }
-    apiKey = plainKey;
-  } else {
-    let fallbackKey = activeModel.apiKey || '';
-    if (fallbackKey.startsWith('b64:')) {
-      try {
-        fallbackKey = base64ToUtf8(fallbackKey.substring(4));
-      } catch (e2) {
-        fallbackKey = '';
-      }
-    }
-    if (fallbackKey && fallbackKey.length > 10) {
-      apiKey = fallbackKey;
-    } else {
-      showToast('API Key 未配置，请先在设置中添加模型并填写密钥。', 4000);
-      return;
-    }
+  // API Key 仅以 Base64 形式保存在本地配置中，调用前还原。
+  let apiKey = activeModel.apiKey || '';
+  if (apiKey.startsWith('b64:')) {
+    apiKey = base64ToUtf8(apiKey.substring(4));
   }
   if (!apiKey || apiKey.length < 10) {
-    showToast('API Key 无效，请检查密码保险箱或重新输入', 4000);
+    showToast('API Key 未配置或无效，请先在设置中填写。', 4000);
     return;
   }
   const modelConfig = { ...activeModel, apiKey };
@@ -524,6 +500,7 @@ async function generatePrescription() {
     currentAbort = null;
     generateBtn.disabled = false;
     cancelBtn.style.display = 'none';
+    updateDailyQuotaUI();
   }
 }
 
@@ -899,7 +876,7 @@ function renderFlows(flows, defaultFlowId) {
 }
 
 // ===== 设置：渲染模型 =====
-function renderModels(models, hasVault = false, vaultUnlocked = false) {
+function renderModels(models) {
   if (models.length === 0) {
     models = [...DEFAULT_MODELS];
   }
@@ -910,8 +887,7 @@ function renderModels(models, hasVault = false, vaultUnlocked = false) {
     const modelName = m.modelName || defaultModelNames[m.type] || '';
     const datalistId = `model-options-${m.id || idx}`;
     const modelOptions = MODEL_OPTIONS_BY_TYPE[m.type] || [];
-    const isDisabled = hasVault && !vaultUnlocked;
-    const placeholder = isDisabled ? '已加密（请先解锁）' : (hasKey ? '********' : '请输入 API Key');
+    const placeholder = hasKey ? '********' : '请输入 API Key';
     const isPreset = PRESET_IDS.includes(m.id);
     return `
       <div class="model-item" data-id="${m.id}">
@@ -932,8 +908,9 @@ function renderModels(models, hasVault = false, vaultUnlocked = false) {
           </datalist>
         </label>
         <label>API Key：
-          <input type="password" class="model-apikey" placeholder="${placeholder}" value="${displayKey}" data-original-key="${escapeHtml(m.apiKey || '')}" ${isDisabled ? 'disabled' : ''} />
-          ${!isDisabled && hasKey ? '<button class="clear-key-btn">清除</button>' : ''}
+          <input type="password" class="model-apikey" placeholder="${placeholder}" value="${displayKey}" data-original-key="${escapeHtml(m.apiKey || '')}" />
+          ${hasKey ? '<button class="clear-key-btn">清除</button>' : ''}
+          ${m.useDailyLimit ? `<span class="hint-text">默认 Key · 每日 ${m.dailyLimit || DEFAULT_DEEPSEEK_DAILY_LIMIT} 次</span>` : ''}
         </label>
         <div class="default-checkbox">
           <input type="checkbox" class="model-active" ${m.active ? 'checked' : ''}>
@@ -994,49 +971,36 @@ async function testModel(modelItem) {
   const modelNameInput = modelItem.querySelector('.model-modelname');
   const keyInput = modelItem.querySelector('.model-apikey');
   const resultSpan = modelItem.querySelector('.test-result');
-  const modelId = modelItem.dataset.id;
-
   const type = typeSelect.value;
   let endpoint = endpointInput.value;
   if (!endpoint && defaultEndpoints[type]) endpoint = defaultEndpoints[type];
 
-  const hasVault = vault.hasVaultPassword();
   let apiKey = null;
 
-  if (hasVault) {
-    if (vault.isVaultUnlocked()) {
-      try {
-        apiKey = vault.getApiKeyForModel(modelId);
-      } catch (e) {
-        resultSpan.textContent = '❌ 该模型未在保险箱中存储 Key，请检查';
-        return;
-      }
-      if (!apiKey) {
-        resultSpan.textContent = '❌ 该模型未在保险箱中存储 Key，请检查';
-        return;
-      }
-    } else {
-      resultSpan.textContent = '🔒 请先解锁密码保险箱再进行测试';
-      return;
-    }
+  const val = keyInput.value;
+  if (val && val !== '********') {
+    apiKey = val;
   } else {
-    let val = keyInput.value;
-    if (val && val !== '********') {
-      apiKey = val;
-    } else {
-      const orig = keyInput.dataset.originalKey || '';
-      if (orig) {
-        apiKey = orig.startsWith('b64:') ? base64ToUtf8(orig.substring(4)) : base64ToUtf8(orig);
-      }
+    const orig = keyInput.dataset.originalKey || '';
+    if (orig) {
+      apiKey = orig.startsWith('b64:') ? base64ToUtf8(orig.substring(4)) : orig;
     }
-    if (!apiKey) {
-      resultSpan.textContent = '❌ 请填写 API Key';
-      return;
-    }
+  }
+  if (!apiKey) {
+    resultSpan.textContent = '❌ 请填写 API Key';
+    return;
   }
 
   const modelName = modelNameInput.value || defaultModelNames[type] || '';
-  const config = { type, endpoint, apiKey, modelName };
+  const originalKey = keyInput.dataset.originalKey || '';
+  const config = {
+    type,
+    endpoint,
+    apiKey,
+    modelName,
+    useDailyLimit: originalKey === DEFAULT_DEEPSEEK_API_KEY && Boolean(DEFAULT_DEEPSEEK_API_KEY),
+    dailyLimit: DEFAULT_DEEPSEEK_DAILY_LIMIT
+  };
   resultSpan.textContent = '⏳ 测试中...';
   const btn = modelItem.querySelector('.test-model');
   btn.disabled = true;
@@ -1057,6 +1021,7 @@ async function testModel(modelItem) {
     resultSpan.textContent = `❌ 失败：${err.message}`;
   } finally {
     btn.disabled = false;
+    updateDailyQuotaUI();
   }
 }
 
@@ -1066,10 +1031,8 @@ function renderSettings() {
   try {
     themeSelect.value = getStoredTheme();
 
-    const hasVault = vault.hasVaultPassword();
-    const vaultUnlocked = vault.isVaultUnlocked();
     const models = settings.models.map(m => ({ ...m, apiKey: m.apiKey || '' }));
-    renderModels(models, hasVault, vaultUnlocked);
+    renderModels(models);
 
     const flows = settings.customFlows || DEFAULT_FLOWS;
     const defaultFlowId = settings.prescriptionStyle || flows[0]?.id;
@@ -1078,64 +1041,21 @@ function renderSettings() {
     if (autoSaveCheck) autoSaveCheck.checked = settings.autoSaveHistory || false;
     if (maxInputLengthEl) maxInputLengthEl.value = settings.maxInputLength || 8000;
 
-    updateVaultStatusUI();
+    updateDailyQuotaUI();
   } catch (err) {
     console.error('渲染设置失败:', err);
     showToast('设置页面加载失败，请刷新');
   }
 }
 
-// ===== 保险箱状态 UI =====
-function updateVaultStatusUI() {
-  const unlocked = vault.isVaultUnlocked();
-  const hasPassword = vault.hasVaultPassword();
-
-  const vaultStatusEl = document.getElementById('vault-status');
-  if (vaultStatusEl) {
-    vaultStatusEl.textContent = `状态：${hasPassword ? '已设置密码' : '未设置密码'}${hasPassword && unlocked ? '（已解锁）' : hasPassword ? '（未解锁）' : ''}`;
-  }
-  if (vaultSetBtn) vaultSetBtn.textContent = hasPassword ? '修改密码' : '设置密码';
-  if (vaultUnlockBtn) vaultUnlockBtn.style.display = (hasPassword && !unlocked) ? 'inline-flex' : 'none';
-  if (vaultLockBtn) vaultLockBtn.style.display = (hasPassword && unlocked) ? 'inline-flex' : 'none';
-  if (vaultStatusBtn) vaultStatusBtn.textContent = (hasPassword && unlocked) ? '🔓' : '🔒';
-}
-
-// ===== 保险箱：更新状态并重渲染模型 =====
-function updateVaultStatus() {
-  const hasVault = vault.hasVaultPassword();
-  const unlocked = vault.isVaultUnlocked();
-  updateVaultStatusUI();
-
-  const models = settings.models.map(m => ({ ...m, apiKey: m.apiKey || '' }));
-  if (modelsContainer) renderModels(models, hasVault, unlocked);
-}
-
 // ===== 设置：保存 =====
 async function saveSettingsHandler() {
-  const hasVault = vault.hasVaultPassword();
-  let vaultUnlocked = false;
-  if (hasVault) {
-    if (!vault.isVaultUnlocked()) {
-      showToast('密码保险箱已锁定，请先解锁再保存设置。');
-      return;
-    }
-    vaultUnlocked = true;
-  }
-
   const modelItems = modelsContainer.querySelectorAll('.model-item');
   const models = [];
-  const modelIds = [];
-  const newKeyMap = {};
-
-  let oldKeyMap = {};
-  if (hasVault && vaultUnlocked) {
-    oldKeyMap = vault.getDecryptedKeyMap();
-  }
 
   for (const item of modelItems) {
     const id = item.dataset.id || genId();
     if (!item.dataset.id) item.dataset.id = id;
-    modelIds.push(id);
 
     const name = item.querySelector('.model-name').value;
     const type = item.querySelector('.model-type').value;
@@ -1144,40 +1064,17 @@ async function saveSettingsHandler() {
     const modelName = item.querySelector('.model-modelname').value || defaultModelNames[type] || '';
     const active = item.querySelector('.model-active').checked;
 
+    const keyInput = item.querySelector('.model-apikey');
+    const rawKey = keyInput.value;
     let apiKey = '';
-    if (hasVault && vaultUnlocked) {
-      const keyInput = item.querySelector('.model-apikey');
-      let rawKey = keyInput.value;
-      if (rawKey && rawKey !== '********') {
-        newKeyMap[id] = rawKey;
-        keyInput.value = '********';
-        keyInput.dataset.originalKey = '********';
-      } else if (oldKeyMap[id]) {
-        newKeyMap[id] = oldKeyMap[id];
-      }
+    if (rawKey && rawKey !== '********') {
+      apiKey = 'b64:' + utf8ToBase64(rawKey);
     } else {
-      const keyInput = item.querySelector('.model-apikey');
-      let rawKey = keyInput.value;
-      if (rawKey && rawKey !== '********') {
-        apiKey = 'b64:' + utf8ToBase64(rawKey);
-      } else {
-        apiKey = keyInput.dataset.originalKey || '';
-      }
+      apiKey = keyInput.dataset.originalKey || '';
     }
 
-    models.push({ id, name, type, endpoint, apiKey, modelName, active });
-  }
-
-  if (hasVault && vaultUnlocked) {
-    for (const id of Object.keys(newKeyMap)) {
-      if (!modelIds.includes(id)) delete newKeyMap[id];
-    }
-    try {
-      await vault.saveEncryptedKeys(newKeyMap);
-    } catch (e) {
-      showToast('保存加密密钥失败：' + e.message);
-      return;
-    }
+    const useDailyLimit = apiKey === DEFAULT_DEEPSEEK_API_KEY && Boolean(DEFAULT_DEEPSEEK_API_KEY);
+    models.push({ id, name, type, endpoint, apiKey, modelName, active, useDailyLimit, dailyLimit: useDailyLimit ? DEFAULT_DEEPSEEK_DAILY_LIMIT : undefined });
   }
 
   const flowItems = flowsContainer.querySelectorAll('.flow-item');
@@ -1225,7 +1122,7 @@ async function saveSettingsHandler() {
   charLimitInfo.textContent = `限制 ${maxInputLength} 字符`;
   updateCharCounter();
   renderFlowsSelect();
-  updateVaultStatus();
+  renderSettings();
 
   saveStatus.textContent = '✅ 已保存';
   setTimeout(() => saveStatus.textContent = '', 2000);
@@ -1234,15 +1131,11 @@ async function saveSettingsHandler() {
 
 // ===== 设置：添加模型 =====
 function addModel() {
-  const hasVault = vault.hasVaultPassword();
-  const vaultUnlocked = vault.isVaultUnlocked();
-  const isDisabled = hasVault && !vaultUnlocked;
-
   const item = document.createElement('div');
   item.className = 'model-item';
   const id = genId();
   const datalistId = `model-options-${id}`;
-  const placeholder = isDisabled ? '已加密（请先解锁）' : '请输入 API Key';
+  const placeholder = '请输入 API Key';
   const defaultOptions = MODEL_OPTIONS_BY_TYPE.deepseek || [];
 
   item.innerHTML = `
@@ -1260,7 +1153,7 @@ function addModel() {
         ${defaultOptions.map(opt => `<option value="${opt}">`).join('')}
       </datalist>
     </label>
-    <label>API Key：<input type="password" class="model-apikey" placeholder="${placeholder}" data-original-key="" ${isDisabled ? 'disabled' : ''} /></label>
+    <label>API Key：<input type="password" class="model-apikey" placeholder="${placeholder}" data-original-key="" /></label>
     <div class="default-checkbox">
       <input type="checkbox" class="model-active">
       <label>设为默认</label>
@@ -1314,164 +1207,6 @@ function addFlow() {
   });
   div.querySelector('.delete-flow').addEventListener('click', () => {
     if (confirm('确定删除此流派？')) div.remove();
-  });
-}
-
-// ===== 保险箱：设置/修改密码 UI =====
-let pendingOldPwdResolver = null;
-
-function getOldPasswordInline() {
-  const area = document.getElementById('vault-old-pwd-area');
-  const input = document.getElementById('vault-old-pwd-input');
-  area.style.display = 'flex';
-  input.focus();
-  return new Promise(resolve => {
-    pendingOldPwdResolver = resolve;
-  });
-}
-
-function bindVaultOldPwd() {
-  const confirmBtn = document.getElementById('vault-old-pwd-confirm');
-  const cancelBtn2 = document.getElementById('vault-old-pwd-cancel');
-  const input = document.getElementById('vault-old-pwd-input');
-  const area = document.getElementById('vault-old-pwd-area');
-
-  confirmBtn.addEventListener('click', () => {
-    if (pendingOldPwdResolver) {
-      pendingOldPwdResolver(input.value || null);
-      pendingOldPwdResolver = null;
-    }
-    area.style.display = 'none';
-    input.value = '';
-  });
-  cancelBtn2.addEventListener('click', () => {
-    if (pendingOldPwdResolver) {
-      pendingOldPwdResolver(null);
-      pendingOldPwdResolver = null;
-    }
-    area.style.display = 'none';
-    input.value = '';
-  });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') confirmBtn.click();
-    if (e.key === 'Escape') cancelBtn2.click();
-  });
-}
-
-function bindVaultUnlockArea() {
-  const area = document.getElementById('vault-unlock-area');
-  const input = document.getElementById('vault-unlock-input');
-  const confirmBtn = document.getElementById('vault-unlock-confirm');
-  const cancelBtn2 = document.getElementById('vault-unlock-cancel');
-
-  cancelBtn2.addEventListener('click', () => {
-    area.style.display = 'none';
-    input.value = '';
-  });
-
-  confirmBtn.addEventListener('click', async () => {
-    const pwd = input.value;
-    if (!pwd) return;
-    const success = await vault.unlockVault(pwd);
-    if (success) {
-      area.style.display = 'none';
-      input.value = '';
-      vaultMessage.textContent = '解锁成功';
-      updateVaultStatus();
-    } else {
-      vaultMessage.textContent = '解锁失败，密码错误';
-      input.value = '';
-      input.focus();
-    }
-  });
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') confirmBtn.click();
-    if (e.key === 'Escape') cancelBtn2.click();
-  });
-}
-
-function hasPlainKeys() {
-  const s = getSettings();
-  if (!s?.models) return false;
-  for (const model of s.models) {
-    let key = model.apiKey || '';
-    if (key.startsWith('b64:')) {
-      try { key = base64ToUtf8(key.substring(4)); } catch (e) { continue; }
-    }
-    if (key && key.length > 0) return true;
-  }
-  return false;
-}
-
-function bindVaultSet() {
-  const passwordEl = document.getElementById('vault-password');
-  const confirmEl = document.getElementById('vault-password-confirm');
-
-  vaultSetBtn.addEventListener('click', async () => {
-    const newPwd = passwordEl.value;
-    const confirmPwd = confirmEl.value;
-    if (!newPwd || newPwd.length < 6) {
-      vaultMessage.textContent = '密码长度至少6位';
-      return;
-    }
-    if (newPwd !== confirmPwd) {
-      vaultMessage.textContent = '两次密码不一致';
-      return;
-    }
-
-    if (hasPlainKeys()) {
-      const userConfirmed = confirm(
-        '检测到本地存储中有未加密的 API Key，' +
-        '设置密码后将自动加密这些密钥并清空明文。\n' +
-        '是否继续？'
-      );
-      if (!userConfirmed) return;
-    }
-
-    const encrypted = vault.getEncryptedKeys();
-    let oldPwd = null;
-    if (Object.keys(encrypted).length > 0) {
-      oldPwd = await getOldPasswordInline();
-      if (oldPwd === null) return;
-    }
-
-    try {
-      await vault.setVaultPassword(newPwd, oldPwd);
-      vaultMessage.textContent = '密码设置成功！';
-      passwordEl.value = '';
-      confirmEl.value = '';
-      updateVaultStatus();
-    } catch (e) {
-      vaultMessage.textContent = '设置失败：' + (e.message || '未知错误');
-    }
-  });
-}
-
-function bindVaultUnlockButton() {
-  vaultUnlockBtn.addEventListener('click', () => {
-    const area = document.getElementById('vault-unlock-area');
-    const input = document.getElementById('vault-unlock-input');
-    area.style.display = 'flex';
-    input.focus();
-  });
-}
-
-function bindVaultLockButton() {
-  vaultLockBtn.addEventListener('click', () => {
-    vault.lockVault();
-    updateVaultStatus();
-    vaultMessage.textContent = '已锁定';
-  });
-}
-
-function bindVaultReset() {
-  vaultResetBtn.addEventListener('click', async () => {
-    if (!confirm('⚠️ 确定要重置保险箱吗？\n这将永久清除所有已加密的 API Key，且无法恢复！\n请确保您已备份密钥。')) return;
-    if (!confirm('再次确认：您将丢失所有已保存的 API Key，并且密码将被清除。')) return;
-    await vault.resetVault();
-    vaultMessage.textContent = '保险箱已重置，所有加密数据已清除。';
-    updateVaultStatus();
   });
 }
 
@@ -1540,21 +1275,9 @@ function init() {
     themeSelect = document.getElementById('theme-select');
     maxInputLengthEl = document.getElementById('max-input-length');
 
-    vaultStatusBtn = document.getElementById('vault-status-btn');
     themeToggle = document.getElementById('theme-toggle');
     toastEl = document.getElementById('toast');
-
-    unlockOverlay = document.getElementById('vault-unlock-overlay');
-    unlockPwd = document.getElementById('vault-unlock-pwd');
-    unlockConfirmOverlay = document.getElementById('vault-unlock-confirm-overlay');
-    unlockCancelOverlay = document.getElementById('vault-unlock-cancel-overlay');
-    unlockError = document.getElementById('vault-unlock-error');
-
-    vaultSetBtn = document.getElementById('vault-set-btn');
-    vaultUnlockBtn = document.getElementById('vault-unlock-btn');
-    vaultLockBtn = document.getElementById('vault-lock-btn');
-    vaultResetBtn = document.getElementById('vault-reset-btn');
-    vaultMessage = document.getElementById('vault-message');
+    dailyQuotaInfo = document.getElementById('daily-quota-info');
 
     // 加载设置
     settings = loadSettings();
@@ -1601,43 +1324,6 @@ function init() {
     patientHistory.addEventListener('input', updateCharCounter);
     patientGender.addEventListener('change', updateCharCounter);
     patientAge.addEventListener('input', updateCharCounter);
-
-    // 保险箱覆盖层事件
-    unlockConfirmOverlay.addEventListener('click', async () => {
-      const pwd = unlockPwd.value;
-      if (!pwd) { unlockError.textContent = '请输入密码'; return; }
-      const success = await vault.unlockVault(pwd);
-      if (success) {
-        closeVaultOverlay();
-        unlockPwd.value = '';
-        unlockError.textContent = '';
-        updateVaultStatus();
-        showToast('已解锁密码保险箱');
-      } else {
-        unlockError.textContent = '密码错误，请重试';
-        unlockPwd.value = '';
-      }
-    });
-    unlockCancelOverlay.addEventListener('click', closeVaultOverlay);
-    unlockPwd.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') unlockConfirmOverlay.click();
-      if (e.key === 'Escape') unlockCancelOverlay.click();
-    });
-
-    vaultStatusBtn.addEventListener('click', () => {
-      if (!vault.hasVaultPassword()) {
-        showToast('尚未设置密码保险箱，请前往设置');
-        switchView('settings');
-        return;
-      }
-      if (vault.isVaultUnlocked()) {
-        vault.lockVault();
-        updateVaultStatus();
-        showToast('已锁定保险箱');
-      } else {
-        openVaultOverlay();
-      }
-    });
 
     // 导航事件
     document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -1730,19 +1416,9 @@ function init() {
     addFlowBtn.addEventListener('click', addFlow);
     saveSettingsBtn.addEventListener('click', saveSettingsHandler);
 
-    // 保险箱设置事件
-    bindVaultOldPwd();
-    bindVaultUnlockArea();
-    bindVaultSet();
-    bindVaultUnlockButton();
-    bindVaultLockButton();
-    bindVaultReset();
-
     // 默认视图
     switchView('generate');
-
-    // 刷新保险箱状态 UI
-    updateVaultStatus();
+    updateDailyQuotaUI();
 
     // Service Worker 注册与更新提示
     if ('serviceWorker' in navigator) {
@@ -1761,82 +1437,11 @@ function init() {
         .catch(err => console.error('Service Worker registration failed', err));
     }
 
-    // 安装引导（Android + iOS）
-    let deferredPrompt;
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
-      showInstallBanner(true);
-    });
-
-    if (window.navigator.standalone === false) {
-      showIosInstallGuide();
-    }
-
-    // 启动时若保险箱已存在且锁定，弹出解锁提示
-    if (vault.hasVaultPassword() && !vault.isVaultUnlocked()) {
-      setTimeout(() => openVaultOverlay(), 300);
-    }
-
     console.log('应用初始化完成');
   } catch (err) {
     console.error('初始化失败:', err);
     showToast('应用启动失败，请刷新页面');
   }
-}
-
-function showInstallBanner(show) {
-  if (!show) {
-    const banner = document.getElementById('install-banner');
-    if (banner) banner.remove();
-    return;
-  }
-  if (document.getElementById('install-banner')) return;
-  const banner = document.createElement('div');
-  banner.id = 'install-banner';
-  banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);padding:12px 16px;box-shadow:0 -2px 10px rgba(0,0,0,0.2);display:flex;justify-content:space-between;align-items:center;z-index:10000;border-top:1px solid var(--border-color);';
-  banner.innerHTML = `
-    <span>📲 安装应用以获得更好体验</span>
-    <div>
-      <button id="install-btn" class="btn-primary" style="margin-right:8px;">安装</button>
-      <button id="close-install-banner" class="btn-secondary">关闭</button>
-    </div>
-  `;
-  document.body.appendChild(banner);
-  document.getElementById('install-btn').addEventListener('click', async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const result = await deferredPrompt.userChoice;
-      if (result.outcome === 'accepted') {
-        showToast('应用已添加至主屏幕');
-      }
-      deferredPrompt = null;
-      showInstallBanner(false);
-    }
-  });
-  document.getElementById('close-install-banner').addEventListener('click', () => {
-    showInstallBanner(false);
-  });
-}
-
-function showIosInstallGuide() {
-  if (localStorage.getItem('ios_install_guide_shown')) return;
-  const guide = document.createElement('div');
-  guide.id = 'ios-install-guide';
-  guide.style.cssText = 'position:fixed;bottom:70px;left:20px;right:20px;background:var(--bg-card);padding:16px;border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:10000;border:1px solid var(--border-color);';
-  guide.innerHTML = `
-    <p style="margin:0 0 8px;">📱 添加到主屏幕：</p>
-    <ol style="margin:0 0 12px 20px;font-size:14px;">
-      <li>点击底部「分享」按钮</li>
-      <li>选择「添加到主屏幕」</li>
-    </ol>
-    <button id="close-ios-guide" class="btn-secondary" style="float:right;">知道了</button>
-  `;
-  document.body.appendChild(guide);
-  document.getElementById('close-ios-guide').addEventListener('click', () => {
-    guide.remove();
-    localStorage.setItem('ios_install_guide_shown', 'true');
-  });
 }
 
 // ===== 启动 =====

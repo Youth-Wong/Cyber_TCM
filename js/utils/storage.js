@@ -1,7 +1,16 @@
 // js/utils/storage.js
 
 // ==================== 设置存储 (localStorage) ====================
+import {
+  DEFAULT_DEEPSEEK_API_KEY_BASE64,
+  DEFAULT_DEEPSEEK_DAILY_LIMIT
+} from '../config.js';
+import { utf8ToBase64 } from './encoding.js';
+
 const SETTINGS_KEY = 'prescription_settings';
+export const DEFAULT_DEEPSEEK_API_KEY = DEFAULT_DEEPSEEK_API_KEY_BASE64
+  ? `b64:${DEFAULT_DEEPSEEK_API_KEY_BASE64}`
+  : '';
 
 const DEFAULT_ENDPOINTS = {
   deepseek: 'https://api.deepseek.com',
@@ -23,8 +32,10 @@ export const DEFAULT_MODELS = [
     name: 'DeepSeek-V4',
     type: 'deepseek',
     endpoint: 'https://api.deepseek.com',
-    apiKey: '',
+    apiKey: DEFAULT_DEEPSEEK_API_KEY,
     modelName: 'deepseek-v4-flash',
+    useDailyLimit: Boolean(DEFAULT_DEEPSEEK_API_KEY),
+    dailyLimit: DEFAULT_DEEPSEEK_DAILY_LIMIT,
     active: true
   },
   {
@@ -91,6 +102,8 @@ function migrateLegacy(raw) {
       endpoint: m.endpoint || DEFAULT_ENDPOINTS[m.type || 'deepseek'],
       apiKey: m.apiKey || '',
       modelName: m.modelName || DEFAULT_MODEL_NAMES[m.type || 'deepseek'],
+      useDailyLimit: !!m.useDailyLimit,
+      dailyLimit: Number(m.dailyLimit) || DEFAULT_DEEPSEEK_DAILY_LIMIT,
       active: !!m.active
     }));
     const active = settings.models.find(m => m.active);
@@ -151,6 +164,18 @@ export function loadSettings() {
     const active = settings.models.find(m => m.active);
     settings.activeModelId = active ? active.id : settings.models[0].id;
   }
+  settings.models = settings.models.map(model => {
+    const normalized = { ...model };
+    if (normalized.id === 'deepseek' && DEFAULT_DEEPSEEK_API_KEY && (!normalized.apiKey || normalized.useDailyLimit === true)) {
+      normalized.apiKey = DEFAULT_DEEPSEEK_API_KEY;
+    }
+    if (normalized.apiKey && !normalized.apiKey.startsWith('b64:')) {
+      normalized.apiKey = `b64:${utf8ToBase64(normalized.apiKey)}`;
+    }
+    normalized.useDailyLimit = normalized.apiKey === DEFAULT_DEEPSEEK_API_KEY && Boolean(DEFAULT_DEEPSEEK_API_KEY);
+    normalized.dailyLimit = normalized.useDailyLimit ? DEFAULT_DEEPSEEK_DAILY_LIMIT : undefined;
+    return normalized;
+  });
   settings.maxInputLength = Math.max(100, Number(settings.maxInputLength) || 8000);
 
   saveSettings(settings);

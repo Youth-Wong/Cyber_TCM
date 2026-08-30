@@ -1,8 +1,9 @@
 // js/utils/llm-adapter.js
+import { consumeDailyQuota } from './daily-quota.js';
 
 // ---------- 非流式调用 ----------
 export async function callLLM(modelConfig, prompt, signal) {
-  const { type, endpoint, apiKey, modelName } = modelConfig;
+  const { type, endpoint, apiKey, modelName, useDailyLimit, dailyLimit } = modelConfig;
   let finalEndpoint = endpoint;
   if (!finalEndpoint) {
     switch (type) {
@@ -14,6 +15,7 @@ export async function callLLM(modelConfig, prompt, signal) {
     }
   }
   if (['deepseek', 'qwen', 'kimi', 'xiaomi'].includes(type)) {
+    if (useDailyLimit) consumeDailyQuota(dailyLimit);
     return callOpenAICompatible(finalEndpoint, apiKey, modelName || getDefaultModel(type), prompt, signal);
   }
   throw new Error('不支持的模型类型');
@@ -21,7 +23,7 @@ export async function callLLM(modelConfig, prompt, signal) {
 
 // ---------- 流式调用 ----------
 export async function* callLLMStream(modelConfig, prompt, signal) {
-  const { type, endpoint, apiKey, modelName } = modelConfig;
+  const { type, endpoint, apiKey, modelName, useDailyLimit, dailyLimit } = modelConfig;
   let finalEndpoint = endpoint;
   if (!finalEndpoint) {
     switch (type) {
@@ -33,6 +35,7 @@ export async function* callLLMStream(modelConfig, prompt, signal) {
     }
   }
   if (['deepseek', 'qwen', 'kimi', 'xiaomi'].includes(type)) {
+    if (useDailyLimit) consumeDailyQuota(dailyLimit);
     yield* callOpenAICompatibleStream(finalEndpoint, apiKey, modelName || getDefaultModel(type), prompt, signal);
   } else {
     throw new Error('不支持的模型类型');

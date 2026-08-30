@@ -1,15 +1,15 @@
 // sw.js
-const CACHE_NAME = 'prescription-cache-v3';
+const CACHE_NAME = 'prescription-cache-v5';
 const urlsToCache = [
   '/',
   '/index.html',
   '/css/app.css',
   '/js/app.js',
+  '/js/config.js',
   '/js/utils/encoding.js',
+  '/js/utils/daily-quota.js',
   '/js/utils/llm-adapter.js',
   '/js/utils/storage.js',
-  '/js/utils/crypto-helper.js',
-  '/js/utils/vault.js',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png'

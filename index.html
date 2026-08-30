@@ -21,7 +21,6 @@
         <button class="nav-btn" data-view="history">历史</button>
         <button class="nav-btn" data-view="settings">设置</button>
       </nav>
-      <button id="vault-status-btn" class="icon-btn" title="密码保险箱">🔒</button>
       <button id="theme-toggle" class="icon-btn" title="切换主题">🌙</button>
     </header>
 
@@ -124,6 +123,7 @@
 
           <h2>LLM 模型配置</h2>
           <p>支持 DeepSeek、通义千问 (Qwen)、Kimi (Moonshot)、小米 (Xiaomi) 四家国产模型。</p>
+          <p id="daily-quota-info" class="hint-text"></p>
           <div id="models-container"></div>
           <button id="add-model-btn" class="btn-secondary">+ 添加模型</button>
 
@@ -142,31 +142,6 @@
             <span class="hint-text">(超过此长度将拒绝生成，提示用户精简)</span>
           </div>
 
-          <h2>🔐 密码保险箱</h2>
-          <p>设置密码后，您的 API Key 将被加密存储。刷新页面后需重新解锁。</p>
-          <div id="vault-status">状态：未设置密码</div>
-          <div class="vault-actions">
-            <input type="password" id="vault-password" placeholder="新密码（至少6位）" />
-            <input type="password" id="vault-password-confirm" placeholder="确认密码" />
-            <button id="vault-set-btn" class="btn-primary">设置密码</button>
-            <button id="vault-unlock-btn" class="btn-secondary" style="display:none;">解锁</button>
-            <button id="vault-lock-btn" class="btn-secondary" style="display:none;">锁定</button>
-          </div>
-          <div id="vault-reset-row">
-            <button id="vault-reset-btn" class="btn-danger">重置保险箱（清除所有加密数据）</button>
-          </div>
-          <div id="vault-old-pwd-area" class="vault-inline-area" style="display:none;">
-            <input type="password" id="vault-old-pwd-input" placeholder="输入旧密码" />
-            <button id="vault-old-pwd-confirm" class="btn-primary">确认</button>
-            <button id="vault-old-pwd-cancel" class="btn-secondary">取消</button>
-          </div>
-          <div id="vault-unlock-area" class="vault-inline-area" style="display:none;">
-            <input type="password" id="vault-unlock-input" placeholder="输入密码解锁" />
-            <button id="vault-unlock-confirm" class="btn-primary">确认解锁</button>
-            <button id="vault-unlock-cancel" class="btn-secondary">取消</button>
-          </div>
-          <div id="vault-message" class="vault-message"></div>
-
           <div class="settings-save-row">
             <button id="save-settings-btn" class="btn-primary">保存设置</button>
             <span id="save-status"></span>
@@ -174,20 +149,6 @@
         </div>
       </section>
     </main>
-
-    <!-- 保险箱解锁覆盖层 -->
-    <div id="vault-unlock-overlay" class="vault-overlay hidden">
-      <div class="vault-overlay-box">
-        <h2>🔐 密码保险箱已锁定</h2>
-        <p>请输入密码解锁以使用 API Key</p>
-        <input type="password" id="vault-unlock-pwd" placeholder="输入密码" />
-        <div class="overlay-actions">
-          <button id="vault-unlock-confirm-overlay" class="btn-primary">解锁</button>
-          <button id="vault-unlock-cancel-overlay" class="btn-secondary">取消</button>
-        </div>
-        <div id="vault-unlock-error" class="overlay-error"></div>
-      </div>
-    </div>
 
     <!-- Toast 提示 -->
     <div id="toast" class="toast hidden"></div>

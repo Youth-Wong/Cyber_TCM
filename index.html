@@ -21,6 +21,7 @@
         <button class="nav-btn" data-view="history">历史</button>
         <button class="nav-btn" data-view="settings">设置</button>
       </nav>
+      <button id="vault-status-btn" class="icon-btn" title="密码保险箱">🔒</button>
       <button id="theme-toggle" class="icon-btn" title="切换主题">🌙</button>
     </header>
 
@@ -40,8 +41,7 @@
             <div class="base-row">
               <label>姓名：<input type="text" id="patient-name" placeholder="患者姓名" /></label>
               <label>性别：<select id="patient-gender"><option value="">未知</option><option value="男">男</option><option value="女">女</option></select></label>
-              <!-- FIX: 添加 step="1" 限制整数年龄 -->
-              <label>年龄：<input type="number" id="patient-age" placeholder="岁" min="0" max="150" step="1" /></label>
+              <label>年龄：<input type="number" id="patient-age" placeholder="岁" min="0" max="200" step="1" /></label>
             </div>
           </div>
 
@@ -59,11 +59,15 @@
 
           <!-- 病史/四诊 -->
           <label for="patient-history">病史与四诊信息：</label>
-          <!-- FIX: 添加 maxlength="2000" 前端限制输入长度 -->
-          <textarea id="patient-history" placeholder="请填写主诉、现病史、舌脉等详细四诊信息..." maxlength="2000"></textarea>
+          <textarea id="patient-history" placeholder="请填写主诉、现病史、舌脉等详细四诊信息..."></textarea>
+          <div class="char-row">
+            <span id="char-counter">0 字符</span>
+            <span id="char-limit-info">限制 8000 字符</span>
+          </div>
 
           <!-- 操作按钮 -->
           <div class="actions">
+            <button id="clear-input-btn" class="btn-secondary">清空</button>
             <button id="generate-btn" class="btn-primary">智能辨证开方</button>
             <button id="cancel-btn" class="btn-danger" style="display:none;">取消</button>
             <button id="retry-btn" class="btn-secondary" style="display:none;">🔄 重试</button>
@@ -81,39 +85,109 @@
       <!-- 视图：历史记录 -->
       <section id="view-history" class="view">
         <div class="history-container">
-          <div class="export-area">
-            <label>起始：<input type="datetime-local" id="export-start" /></label>
-            <label>结束：<input type="datetime-local" id="export-end" /></label>
-            <button id="export-history-btn" class="btn-secondary">📎 导出 CSV</button>
+          <div class="history-toolbar">
+            <div class="search-row">
+              <input type="text" id="search-name" placeholder="姓名" />
+              <input type="text" id="search-keyword" placeholder="病史或处方" />
+              <button id="search-history-btn" class="btn-secondary">🔍 搜索</button>
+              <button id="clear-search-btn" class="btn-secondary" style="display:none;">清除</button>
+            </div>
+            <div class="date-row">
+              <label>从：<input type="datetime-local" id="search-start" /></label>
+              <label>到：<input type="datetime-local" id="search-end" /></label>
+            </div>
           </div>
           <div id="history-list"></div>
-          <button id="clear-history-btn" class="btn-danger" style="width:100%; margin-top:16px;">清空所有历史</button>
+          <div class="history-footer">
+            <div class="export-area">
+              <label>起始：<input type="datetime-local" id="export-start" /></label>
+              <label>结束：<input type="datetime-local" id="export-end" /></label>
+              <button id="export-history-btn" class="btn-secondary">📎 导出 CSV</button>
+            </div>
+            <button id="clear-history-btn" class="btn-danger">清空所有历史</button>
+          </div>
         </div>
       </section>
 
       <!-- 视图：设置 -->
       <section id="view-settings" class="view">
         <div class="settings-container">
-          <h2>模型配置</h2>
+          <h2>界面主题</h2>
+          <div class="theme-selector">
+            <label for="theme-select">主题模式：</label>
+            <select id="theme-select">
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+              <option value="system" selected>跟随系统</option>
+            </select>
+          </div>
+
+          <h2>LLM 模型配置</h2>
+          <p>支持 DeepSeek、通义千问 (Qwen)、Kimi (Moonshot)、小米 (Xiaomi) 四家国产模型。</p>
           <div id="models-container"></div>
           <button id="add-model-btn" class="btn-secondary">+ 添加模型</button>
 
-          <h2 style="margin-top:24px;">处方流派</h2>
+          <h2>处方流派</h2>
+          <p>每个流派包含显示名称和系统提示词。默认流派通过单选按钮指定。</p>
           <div id="flows-container"></div>
           <button id="add-flow-btn" class="btn-secondary">+ 添加流派</button>
 
-          <h2 style="margin-top:24px;">通用设置</h2>
+          <h2>通用设置</h2>
           <label class="checkbox-label">
             <input type="checkbox" id="auto-save-history" /> 每次生成后自动保存到历史
           </label>
+          <div style="margin-top:12px;">
+            <label for="max-input-length">最大输入长度（字符数）：</label>
+            <input type="number" id="max-input-length" value="8000" min="100" step="100" style="width:150px;" />
+            <span class="hint-text">(超过此长度将拒绝生成，提示用户精简)</span>
+          </div>
 
-          <div style="margin-top:16px;">
+          <h2>🔐 密码保险箱</h2>
+          <p>设置密码后，您的 API Key 将被加密存储。刷新页面后需重新解锁。</p>
+          <div id="vault-status">状态：未设置密码</div>
+          <div class="vault-actions">
+            <input type="password" id="vault-password" placeholder="新密码（至少6位）" />
+            <input type="password" id="vault-password-confirm" placeholder="确认密码" />
+            <button id="vault-set-btn" class="btn-primary">设置密码</button>
+            <button id="vault-unlock-btn" class="btn-secondary" style="display:none;">解锁</button>
+            <button id="vault-lock-btn" class="btn-secondary" style="display:none;">锁定</button>
+          </div>
+          <div id="vault-reset-row">
+            <button id="vault-reset-btn" class="btn-danger">重置保险箱（清除所有加密数据）</button>
+          </div>
+          <div id="vault-old-pwd-area" class="vault-inline-area" style="display:none;">
+            <input type="password" id="vault-old-pwd-input" placeholder="输入旧密码" />
+            <button id="vault-old-pwd-confirm" class="btn-primary">确认</button>
+            <button id="vault-old-pwd-cancel" class="btn-secondary">取消</button>
+          </div>
+          <div id="vault-unlock-area" class="vault-inline-area" style="display:none;">
+            <input type="password" id="vault-unlock-input" placeholder="输入密码解锁" />
+            <button id="vault-unlock-confirm" class="btn-primary">确认解锁</button>
+            <button id="vault-unlock-cancel" class="btn-secondary">取消</button>
+          </div>
+          <div id="vault-message" class="vault-message"></div>
+
+          <div class="settings-save-row">
             <button id="save-settings-btn" class="btn-primary">保存设置</button>
-            <span id="save-status" style="margin-left:12px;"></span>
+            <span id="save-status"></span>
           </div>
         </div>
       </section>
     </main>
+
+    <!-- 保险箱解锁覆盖层 -->
+    <div id="vault-unlock-overlay" class="vault-overlay hidden">
+      <div class="vault-overlay-box">
+        <h2>🔐 密码保险箱已锁定</h2>
+        <p>请输入密码解锁以使用 API Key</p>
+        <input type="password" id="vault-unlock-pwd" placeholder="输入密码" />
+        <div class="overlay-actions">
+          <button id="vault-unlock-confirm-overlay" class="btn-primary">解锁</button>
+          <button id="vault-unlock-cancel-overlay" class="btn-secondary">取消</button>
+        </div>
+        <div id="vault-unlock-error" class="overlay-error"></div>
+      </div>
+    </div>
 
     <!-- Toast 提示 -->
     <div id="toast" class="toast hidden"></div>

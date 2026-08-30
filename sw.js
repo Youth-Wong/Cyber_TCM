@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_NAME = 'prescription-cache-v2';
+const CACHE_NAME = 'prescription-cache-v3';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -8,6 +8,8 @@ const urlsToCache = [
   '/js/utils/encoding.js',
   '/js/utils/llm-adapter.js',
   '/js/utils/storage.js',
+  '/js/utils/crypto-helper.js',
+  '/js/utils/vault.js',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png'
@@ -34,20 +36,21 @@ self.addEventListener('activate', event => {
 
 // Stale-While-Revalidate
 self.addEventListener('fetch', event => {
+  // 仅缓存同源 GET 请求
+  if (event.request.method !== 'GET') return;
   event.respondWith(
     caches.match(event.request).then(cachedResponse => {
       const fetchPromise = fetch(event.request).then(networkResponse => {
-        // 更新缓存
-        caches.open(CACHE_NAME).then(cache => {
-          cache.put(event.request, networkResponse.clone());
-        });
+        if (networkResponse && networkResponse.ok) {
+          caches.open(CACHE_NAME).then(cache => {
+            cache.put(event.request, networkResponse.clone());
+          });
+        }
         return networkResponse;
       }).catch(() => {
-        // 网络失败时返回缓存（如果有）
         if (cachedResponse) return cachedResponse;
         throw new Error('Network error');
       });
-      // 如果有缓存则立即返回，否则等待网络
       return cachedResponse || fetchPromise;
     })
   );
